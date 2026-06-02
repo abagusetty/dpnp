@@ -159,11 +159,7 @@ std::unique_ptr<T, USMDeleter>
     T *ptr = nullptr;
 
     // Route USM-device allocations through the dpctl pool when one
-    // has been installed via dpctl.memory.set_allocator. The pool
-    // does not propagate ``propList`` (the SYCL async-alloc API has
-    // no property-list overload); callers that need custom
-    // properties go through the direct path. No dpnp call site
-    // currently passes a non-default propList.
+    // has been installed via dpctl.memory.set_allocator.
     if (kind == sycl::usm::alloc::device) {
         DPCTLSyclMemoryPoolRef pool_ref =
             detail::get_installed_device_pool(q);
@@ -174,9 +170,6 @@ std::unique_ptr<T, USMDeleter>
                 ::dpctl::detail::dpctl_capi::get().MemoryPool_Malloc_(
                     pool_ref, qref, count * sizeof(T));
             if (raw == nullptr) {
-                // User explicitly installed a pool; honor that
-                // routing decision and surface the failure rather
-                // than silently bypass it.
                 throw std::runtime_error(
                     "Unable to allocate device_memory from "
                     "dpctl-installed MemoryPool");
