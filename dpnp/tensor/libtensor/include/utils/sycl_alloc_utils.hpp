@@ -44,20 +44,13 @@
 
 #include <sycl/sycl.hpp>
 
-// Optional: route USM-device allocations through the dpctl-installed
-// MemoryPool when one is registered via dpctl.memory.set_allocator.
-// Resolved through the dpctl Python-C-API (dpctl4pybind11.hpp) — no
-// link against libDPCTLSyclInterface required. Guarded with
-// __has_include so the build still works against older dpctl
-// versions that do not expose the pool wrappers.
-#if __has_include("dpctl/memory/_memory_pool_api.h")
+// dpctl4pybind11.hpp exports the pool cdef-api wrappers
+// (MemoryPool_GetInstalled / Malloc / AsyncFree) through the
+// dpctl_capi singleton; the runtime check
+// ``MemoryPool_GetInstalled(ctx, dev) != nullptr`` is what decides
+// whether a USM-device allocation is routed through the pool. No
+// compile-time gating beyond requiring this dpctl version.
 #include "dpctl4pybind11.hpp"
-#define DPNP_HAS_DPCTL_POOL_ROUTING 1
-#else
-// Older dpctl without the pool cdef-api exports; fall back to
-// direct sycl::malloc_device.
-#define DPNP_HAS_DPCTL_POOL_ROUTING 0
-#endif
 
 namespace dpnp::tensor::alloc_utils
 {
@@ -107,30 +100,25 @@ class USMDeleter
 {
 private:
     sycl::context ctx_;
-#if DPNP_HAS_DPCTL_POOL_ROUTING
     // When ``pool_ref_`` is non-null, the allocation came from a
     // dpctl MemoryPool and must be returned via
-    // ``DPCTLMemoryPool_AsyncFree`` against ``q_``. Otherwise the
-    // legacy ``sycl::free`` on ``ctx_`` is used.
+    // ``MemoryPool_AsyncFree`` against ``q_``. Otherwise the legacy
+    // ``sycl::free`` on ``ctx_`` is used.
     sycl::queue q_{};
     DPCTLSyclMemoryPoolRef pool_ref_{nullptr};
-#endif
 
 public:
     USMDeleter(const sycl::queue &q) : ctx_(q.get_context()) {}
     USMDeleter(const sycl::context &ctx) : ctx_(ctx) {}
 
-#if DPNP_HAS_DPCTL_POOL_ROUTING
     USMDeleter(const sycl::queue &q, DPCTLSyclMemoryPoolRef pool_ref)
         : ctx_(q.get_context()), q_(q), pool_ref_(pool_ref)
     {
     }
-#endif
 
     template <typename T>
     void operator()(T *ptr) const
     {
-#if DPNP_HAS_DPCTL_POOL_ROUTING
         if (pool_ref_ != nullptr) {
             DPCTLSyclQueueRef qref = reinterpret_cast<DPCTLSyclQueueRef>(
                 const_cast<sycl::queue *>(&q_));
@@ -139,19 +127,16 @@ public:
                 reinterpret_cast<DPCTLSyclUSMRef>(ptr));
             return;
         }
-#endif
         sycl_free_noexcept(ptr, ctx_);
     }
 };
 
-#if DPNP_HAS_DPCTL_POOL_ROUTING
 namespace detail
 {
 // Look up the dpctl-installed USM-device pool for ``q``'s
 // (context, device). Returns ``nullptr`` when no pool has been
 // installed via ``dpctl.memory.set_allocator``. Routed through the
-// dpctl4pybind11.hpp Python-C-API singleton; no link-time dependency
-// on libDPCTLSyclInterface.
+// dpctl4pybind11.hpp Python-C-API singleton.
 inline DPCTLSyclMemoryPoolRef get_installed_device_pool(const sycl::queue &q)
 {
     sycl::context ctx = q.get_context();
@@ -163,7 +148,6 @@ inline DPCTLSyclMemoryPoolRef get_installed_device_pool(const sycl::queue &q)
         cref, dref);
 }
 } // namespace detail
-#endif
 
 template <typename T>
 std::unique_ptr<T, USMDeleter>
@@ -174,13 +158,12 @@ std::unique_ptr<T, USMDeleter>
 {
     T *ptr = nullptr;
 
-#if DPNP_HAS_DPCTL_POOL_ROUTING
     // Route USM-device allocations through the dpctl pool when one
     // has been installed via dpctl.memory.set_allocator. The pool
     // does not propagate ``propList`` (the SYCL async-alloc API has
-    // no property-list overload), so any caller that needs custom
-    // properties should pass them via the direct allocation path.
-    // No dpnp call site currently does.
+    // no property-list overload); callers that need custom
+    // properties go through the direct path. No dpnp call site
+    // currently passes a non-default propList.
     if (kind == sycl::usm::alloc::device) {
         DPCTLSyclMemoryPoolRef pool_ref =
             detail::get_installed_device_pool(q);
@@ -199,7 +182,6 @@ std::unique_ptr<T, USMDeleter>
             // sycl::malloc as a best-effort fallback.
         }
     }
-#endif
 
     ptr = sycl::malloc<T>(count, q, kind, propList);
     if (nullptr == ptr) {
