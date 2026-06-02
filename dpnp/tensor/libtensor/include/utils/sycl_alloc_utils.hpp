@@ -173,13 +173,16 @@ std::unique_ptr<T, USMDeleter>
             DPCTLSyclUSMRef raw =
                 ::dpctl::detail::dpctl_capi::get().MemoryPool_Malloc_(
                     pool_ref, qref, count * sizeof(T));
-            if (raw != nullptr) {
-                ptr = reinterpret_cast<T *>(raw);
-                return std::unique_ptr<T, USMDeleter>(
-                    ptr, USMDeleter(q, pool_ref));
+            if (raw == nullptr) {
+                // User explicitly installed a pool; honor that
+                // routing decision and surface the failure rather
+                // than silently bypass it.
+                throw std::runtime_error(
+                    "Unable to allocate device_memory from "
+                    "dpctl-installed MemoryPool");
             }
-            // Pool allocation failed - fall through to direct
-            // sycl::malloc as a best-effort fallback.
+            return std::unique_ptr<T, USMDeleter>(
+                reinterpret_cast<T *>(raw), USMDeleter(q, pool_ref));
         }
     }
 
