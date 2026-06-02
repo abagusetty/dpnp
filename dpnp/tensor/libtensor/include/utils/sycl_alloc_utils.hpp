@@ -54,6 +54,8 @@
 #include "dpctl4pybind11.hpp"
 #define DPNP_HAS_DPCTL_POOL_ROUTING 1
 #else
+// Older dpctl without the pool cdef-api exports; fall back to
+// direct sycl::malloc_device.
 #define DPNP_HAS_DPCTL_POOL_ROUTING 0
 #endif
 
