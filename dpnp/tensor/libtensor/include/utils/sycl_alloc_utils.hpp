@@ -44,6 +44,17 @@
 
 #include <sycl/sycl.hpp>
 
+// Optional: route USM-device allocations through the dpctl-installed
+// MemoryPool when one is registered via dpctl.memory.set_allocator.
+// Guarded with __has_include so the build still works against older
+// dpctl versions that do not ship the pool C API.
+#if __has_include("syclinterface/dpctl_sycl_memory_pool_interface.h")
+#include "syclinterface/dpctl_sycl_memory_pool_interface.h"
+#define DPNP_HAS_DPCTL_POOL_ROUTING 1
+#else
+#define DPNP_HAS_DPCTL_POOL_ROUTING 0
+#endif
+
 namespace dpnp::tensor::alloc_utils
 {
 template <typename T>
@@ -92,17 +103,60 @@ class USMDeleter
 {
 private:
     sycl::context ctx_;
+#if DPNP_HAS_DPCTL_POOL_ROUTING
+    // When ``pool_ref_`` is non-null, the allocation came from a
+    // dpctl MemoryPool and must be returned via
+    // ``DPCTLMemoryPool_AsyncFree`` against ``q_``. Otherwise the
+    // legacy ``sycl::free`` on ``ctx_`` is used.
+    sycl::queue q_{};
+    DPCTLSyclMemoryPoolRef pool_ref_{nullptr};
+#endif
 
 public:
     USMDeleter(const sycl::queue &q) : ctx_(q.get_context()) {}
     USMDeleter(const sycl::context &ctx) : ctx_(ctx) {}
 
+#if DPNP_HAS_DPCTL_POOL_ROUTING
+    USMDeleter(const sycl::queue &q, DPCTLSyclMemoryPoolRef pool_ref)
+        : ctx_(q.get_context()), q_(q), pool_ref_(pool_ref)
+    {
+    }
+#endif
+
     template <typename T>
     void operator()(T *ptr) const
     {
+#if DPNP_HAS_DPCTL_POOL_ROUTING
+        if (pool_ref_ != nullptr) {
+            DPCTLSyclQueueRef qref = reinterpret_cast<DPCTLSyclQueueRef>(
+                const_cast<sycl::queue *>(&q_));
+            DPCTLMemoryPool_AsyncFree(
+                pool_ref_, qref,
+                reinterpret_cast<DPCTLSyclUSMRef>(ptr));
+            return;
+        }
+#endif
         sycl_free_noexcept(ptr, ctx_);
     }
 };
+
+#if DPNP_HAS_DPCTL_POOL_ROUTING
+namespace detail
+{
+// Look up the dpctl-installed USM-device pool for ``q``'s
+// (context, device). Returns ``nullptr`` when no pool has been
+// installed via ``dpctl.memory.set_allocator``.
+inline DPCTLSyclMemoryPoolRef get_installed_device_pool(const sycl::queue &q)
+{
+    sycl::context ctx = q.get_context();
+    sycl::device dev = q.get_device();
+    DPCTLSyclContextRef cref =
+        reinterpret_cast<DPCTLSyclContextRef>(&ctx);
+    DPCTLSyclDeviceRef dref = reinterpret_cast<DPCTLSyclDeviceRef>(&dev);
+    return DPCTLMemoryPool_GetInstalled(cref, dref);
+}
+} // namespace detail
+#endif
 
 template <typename T>
 std::unique_ptr<T, USMDeleter>
@@ -111,13 +165,39 @@ std::unique_ptr<T, USMDeleter>
                  sycl::usm::alloc kind,
                  const sycl::property_list &propList = {})
 {
-    T *ptr = sycl::malloc<T>(count, q, kind, propList);
+    T *ptr = nullptr;
+
+#if DPNP_HAS_DPCTL_POOL_ROUTING
+    // Route USM-device allocations through the dpctl pool when one
+    // has been installed via dpctl.memory.set_allocator. The pool
+    // does not propagate ``propList`` (the SYCL async-alloc API has
+    // no property-list overload), so any caller that needs custom
+    // properties should pass them via the direct allocation path.
+    // No dpnp call site currently does.
+    if (kind == sycl::usm::alloc::device) {
+        DPCTLSyclMemoryPoolRef pool_ref =
+            detail::get_installed_device_pool(q);
+        if (pool_ref != nullptr) {
+            DPCTLSyclQueueRef qref = reinterpret_cast<DPCTLSyclQueueRef>(
+                const_cast<sycl::queue *>(&q));
+            DPCTLSyclUSMRef raw = DPCTLMemoryPool_Malloc(
+                pool_ref, qref, count * sizeof(T));
+            if (raw != nullptr) {
+                ptr = reinterpret_cast<T *>(raw);
+                return std::unique_ptr<T, USMDeleter>(
+                    ptr, USMDeleter(q, pool_ref));
+            }
+            // Pool allocation failed - fall through to direct
+            // sycl::malloc as a best-effort fallback.
+        }
+    }
+#endif
+
+    ptr = sycl::malloc<T>(count, q, kind, propList);
     if (nullptr == ptr) {
         throw std::runtime_error("Unable to allocate device_memory");
     }
-
-    auto usm_deleter = USMDeleter(q);
-    return std::unique_ptr<T, USMDeleter>(ptr, usm_deleter);
+    return std::unique_ptr<T, USMDeleter>(ptr, USMDeleter(q));
 }
 
 template <typename T>
