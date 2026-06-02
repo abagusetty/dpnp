@@ -46,10 +46,12 @@
 
 // Optional: route USM-device allocations through the dpctl-installed
 // MemoryPool when one is registered via dpctl.memory.set_allocator.
-// Guarded with __has_include so the build still works against older
-// dpctl versions that do not ship the pool C API.
-#if __has_include("syclinterface/dpctl_sycl_memory_pool_interface.h")
-#include "syclinterface/dpctl_sycl_memory_pool_interface.h"
+// Resolved through the dpctl Python-C-API (dpctl4pybind11.hpp) — no
+// link against libDPCTLSyclInterface required. Guarded with
+// __has_include so the build still works against older dpctl
+// versions that do not expose the pool wrappers.
+#if __has_include("dpctl/memory/_memory_pool_api.h")
+#include "dpctl4pybind11.hpp"
 #define DPNP_HAS_DPCTL_POOL_ROUTING 1
 #else
 #define DPNP_HAS_DPCTL_POOL_ROUTING 0
@@ -130,7 +132,7 @@ public:
         if (pool_ref_ != nullptr) {
             DPCTLSyclQueueRef qref = reinterpret_cast<DPCTLSyclQueueRef>(
                 const_cast<sycl::queue *>(&q_));
-            DPCTLMemoryPool_AsyncFree(
+            ::dpctl::detail::dpctl_capi::get().MemoryPool_AsyncFree_(
                 pool_ref_, qref,
                 reinterpret_cast<DPCTLSyclUSMRef>(ptr));
             return;
@@ -145,7 +147,9 @@ namespace detail
 {
 // Look up the dpctl-installed USM-device pool for ``q``'s
 // (context, device). Returns ``nullptr`` when no pool has been
-// installed via ``dpctl.memory.set_allocator``.
+// installed via ``dpctl.memory.set_allocator``. Routed through the
+// dpctl4pybind11.hpp Python-C-API singleton; no link-time dependency
+// on libDPCTLSyclInterface.
 inline DPCTLSyclMemoryPoolRef get_installed_device_pool(const sycl::queue &q)
 {
     sycl::context ctx = q.get_context();
@@ -153,7 +157,8 @@ inline DPCTLSyclMemoryPoolRef get_installed_device_pool(const sycl::queue &q)
     DPCTLSyclContextRef cref =
         reinterpret_cast<DPCTLSyclContextRef>(&ctx);
     DPCTLSyclDeviceRef dref = reinterpret_cast<DPCTLSyclDeviceRef>(&dev);
-    return DPCTLMemoryPool_GetInstalled(cref, dref);
+    return ::dpctl::detail::dpctl_capi::get().MemoryPool_GetInstalled_(
+        cref, dref);
 }
 } // namespace detail
 #endif
@@ -180,8 +185,9 @@ std::unique_ptr<T, USMDeleter>
         if (pool_ref != nullptr) {
             DPCTLSyclQueueRef qref = reinterpret_cast<DPCTLSyclQueueRef>(
                 const_cast<sycl::queue *>(&q));
-            DPCTLSyclUSMRef raw = DPCTLMemoryPool_Malloc(
-                pool_ref, qref, count * sizeof(T));
+            DPCTLSyclUSMRef raw =
+                ::dpctl::detail::dpctl_capi::get().MemoryPool_Malloc_(
+                    pool_ref, qref, count * sizeof(T));
             if (raw != nullptr) {
                 ptr = reinterpret_cast<T *>(raw);
                 return std::unique_ptr<T, USMDeleter>(
