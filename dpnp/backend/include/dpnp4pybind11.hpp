@@ -633,6 +633,22 @@ struct ManagedMemory
         throw std::runtime_error(
             "Attempted extraction of shared_ptr on an unrecognized type");
     }
+
+    // Returns true if the USM allocation backing ``h`` was made on queue ``q``.
+    // Used to decide whether ``q``'s in-order deferred free already guarantees
+    // the allocation's lifetime (see keep_args_alive). Returns false for
+    // unrecognized objects, conservatively forcing the explicit lifetime hold.
+    static bool is_allocated_on(const py::object &h, const sycl::queue &q)
+    {
+        if (py::isinstance<::dpctl::memory::usm_memory>(h)) {
+            return py::cast<::dpctl::memory::usm_memory>(h).get_queue() == q;
+        }
+        else if (py::isinstance<tensor::usm_ndarray>(h)) {
+            return py::cast<tensor::usm_ndarray>(h).get_queue() == q;
+        }
+
+        return false;
+    }
 };
 } // end of namespace detail
 
@@ -647,9 +663,30 @@ sycl::event keep_args_alive(sycl::queue &q,
     std::size_t n_usm_owners_held = 0;
     std::array<std::shared_ptr<void>, num> shp_usm{};
 
+    // In-order queues (the default for dpctl cached queues) serialize all
+    // submissions in submission order. This lets us drop work that is only
+    // needed to impose ordering on an out-of-order queue:
+    //   * USM allocated on ``q`` already has its release deferred behind a host
+    //     task ordered after all prior work on ``q`` (dpctl's
+    //     OpaqueSmartPtr_AsyncDelete). Re-anchoring such an allocation here is
+    //     redundant, so it is skipped below.
+    //   * The decref host task no longer needs to be chained onto the USM host
+    //     task via depends_on(host_task_ev); submission order already orders it.
+    // Both optimizations are guarded by ``in_order``; the out-of-order path is
+    // unchanged. Note the per-argument allocation-queue check: USM allocated on
+    // a *different* queue is still held explicitly, since ``q``'s ordering does
+    // not cover it.
+    const bool in_order = q.is_in_order();
+
     for (std::size_t i = 0; i < num; ++i) {
         const auto &py_obj_i = py_objs[i];
         if (detail::ManagedMemory::is_usm_managed_by_shared_ptr(py_obj_i)) {
+            if (in_order &&
+                detail::ManagedMemory::is_allocated_on(py_obj_i, q))
+            {
+                // Lifetime guaranteed by the in-order deferred free on ``q``.
+                continue;
+            }
             const auto &shp =
                 detail::ManagedMemory::extract_shared_ptr(py_obj_i);
             shp_usm[n_usm_owners_held] = shp;
@@ -662,6 +699,10 @@ sycl::event keep_args_alive(sycl::queue &q,
         }
     }
 
+    // The first submitted host task always takes the explicit ``depends``
+    // (which may contain cross-queue events that in-order serialization does
+    // not cover). A second host task only needs explicit chaining when ``q`` is
+    // out-of-order; on an in-order queue submission order suffices.
     bool use_depends = true;
     sycl::event host_task_ev;
 
@@ -671,7 +712,7 @@ sycl::event keep_args_alive(sycl::queue &q,
                 cgh.depends_on(depends);
                 use_depends = false;
             }
-            else {
+            else if (!in_order) {
                 cgh.depends_on(host_task_ev);
             }
             cgh.host_task([shp_usm = std::move(shp_usm)]() {
@@ -688,7 +729,7 @@ sycl::event keep_args_alive(sycl::queue &q,
                 cgh.depends_on(depends);
                 use_depends = false;
             }
-            else {
+            else if (!in_order) {
                 cgh.depends_on(host_task_ev);
             }
             cgh.host_task([n_objects_held, shp_arr = std::move(shp_arr)]() {
