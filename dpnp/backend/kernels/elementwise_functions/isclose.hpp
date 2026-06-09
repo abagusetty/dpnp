@@ -258,15 +258,16 @@ sycl::event
         typename dpnp::tensor::offset_utils::ThreeOffsets_StridedIndexer;
     const IndexerT indexer{nd, a_offset, b_offset, out_offset, shape_strides};
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev = dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using IsCloseFunc =
-            IsCloseStridedScalarFunctor<T, scT, resTy, IndexerT>;
-        cgh.parallel_for<IsCloseFunc>(
-            {nelems},
-            IsCloseFunc(a_tp, b_tp, out_tp, indexer, rtol, atol, equal_nan));
-    });
+            using IsCloseFunc =
+                IsCloseStridedScalarFunctor<T, scT, resTy, IndexerT>;
+            cgh.parallel_for<IsCloseFunc>(
+                {nelems}, IsCloseFunc(a_tp, b_tp, out_tp, indexer, rtol, atol,
+                                      equal_nan));
+        });
     return comp_ev;
 }
 
@@ -303,34 +304,37 @@ sycl::event
     using resTy = bool;
     resTy *out_tp = reinterpret_cast<resTy *>(out_cp);
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev = dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using dpnp::tensor::kernels::alignment_utils::is_aligned;
-        using dpnp::tensor::kernels::alignment_utils::required_alignment;
-        if (is_aligned<required_alignment>(a_tp) &&
-            is_aligned<required_alignment>(b_tp) &&
-            is_aligned<required_alignment>(out_tp)) {
-            constexpr bool enable_sg_loadstore = true;
-            using IsCloseFunc =
-                IsCloseContigScalarFunctor<T, scT, resTy, vec_sz, n_vecs,
-                                           enable_sg_loadstore>;
+            using dpnp::tensor::kernels::alignment_utils::is_aligned;
+            using dpnp::tensor::kernels::alignment_utils::required_alignment;
+            if (is_aligned<required_alignment>(a_tp) &&
+                is_aligned<required_alignment>(b_tp) &&
+                is_aligned<required_alignment>(out_tp)) {
+                constexpr bool enable_sg_loadstore = true;
+                using IsCloseFunc =
+                    IsCloseContigScalarFunctor<T, scT, resTy, vec_sz, n_vecs,
+                                               enable_sg_loadstore>;
 
-            cgh.parallel_for<IsCloseFunc>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                IsCloseFunc(a_tp, b_tp, out_tp, nelems, rtol, atol, equal_nan));
-        }
-        else {
-            constexpr bool disable_sg_loadstore = false;
-            using IsCloseFunc =
-                IsCloseContigScalarFunctor<T, scT, resTy, vec_sz, n_vecs,
-                                           disable_sg_loadstore>;
+                cgh.parallel_for<IsCloseFunc>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    IsCloseFunc(a_tp, b_tp, out_tp, nelems, rtol, atol,
+                                equal_nan));
+            }
+            else {
+                constexpr bool disable_sg_loadstore = false;
+                using IsCloseFunc =
+                    IsCloseContigScalarFunctor<T, scT, resTy, vec_sz, n_vecs,
+                                               disable_sg_loadstore>;
 
-            cgh.parallel_for<IsCloseFunc>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                IsCloseFunc(a_tp, b_tp, out_tp, nelems, rtol, atol, equal_nan));
-        }
-    });
+                cgh.parallel_for<IsCloseFunc>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    IsCloseFunc(a_tp, b_tp, out_tp, nelems, rtol, atol,
+                                equal_nan));
+            }
+        });
 
     return comp_ev;
 }

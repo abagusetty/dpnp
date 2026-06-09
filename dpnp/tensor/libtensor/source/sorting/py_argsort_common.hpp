@@ -47,6 +47,7 @@
 
 #include "utils/memory_overlap.hpp"
 #include "utils/output_validation.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch.hpp"
 
 namespace td_ns = dpnp::tensor::type_dispatch;
@@ -162,12 +163,13 @@ std::pair<sycl::event, sycl::event>
             int dst_elemsize = dst.get_elemsize();
             static constexpr int memset_val(0);
 
-            sycl::event fill_ev = exec_q.submit([&](sycl::handler &cgh) {
-                cgh.depends_on(depends);
+            sycl::event fill_ev =
+                sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+                    cgh.depends_on(depends);
 
-                cgh.memset(reinterpret_cast<void *>(dst.get_data()), memset_val,
-                           iter_nelems * dst_elemsize);
-            });
+                    cgh.memset(reinterpret_cast<void *>(dst.get_data()),
+                               memset_val, iter_nelems * dst_elemsize);
+                });
 
             sycl::event keep_args_alive_ev =
                 dpnp::utils::keep_args_alive(exec_q, {src, dst}, {fill_ev});

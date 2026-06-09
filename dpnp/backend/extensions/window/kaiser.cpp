@@ -37,6 +37,7 @@
 #include "ext/common.hpp"
 
 // dpnp tensor headers
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch.hpp"
 #include "utils/type_utils.hpp"
 
@@ -67,13 +68,14 @@ sycl::event kaiser_impl(sycl::queue &exec_q,
     T *res = reinterpret_cast<T *>(result);
     const T beta = py::cast<const T>(py_beta);
 
-    sycl::event kaiser_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event kaiser_ev = dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using KaiserKernel = dpnp::kernels::kaiser::KaiserFunctor<T>;
-        cgh.parallel_for<KaiserKernel>(sycl::range<1>(nelems),
-                                       KaiserKernel(res, nelems, beta));
-    });
+            using KaiserKernel = dpnp::kernels::kaiser::KaiserFunctor<T>;
+            cgh.parallel_for<KaiserKernel>(sycl::range<1>(nelems),
+                                           KaiserKernel(res, nelems, beta));
+        });
 
     return kaiser_ev;
 }

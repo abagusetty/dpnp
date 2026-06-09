@@ -48,6 +48,7 @@
 #include "utils/offset_utils.hpp"
 #include "utils/output_validation.hpp"
 #include "utils/sycl_alloc_utils.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch.hpp"
 #include "utils/type_utils.hpp"
 
@@ -96,7 +97,7 @@ sycl::event full_contig_impl(sycl::queue &exec_q,
 
     if constexpr (sizeof(dstTy) == sizeof(char)) {
         const auto memset_val = sycl::bit_cast<unsigned char>(fill_v);
-        fill_ev = exec_q.submit([&](sycl::handler &cgh) {
+        fill_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
             cgh.depends_on(depends);
 
             cgh.memset(reinterpret_cast<void *>(dst_p), memset_val,
@@ -137,12 +138,13 @@ sycl::event full_contig_impl(sycl::queue &exec_q,
 
         if (is_zero) {
             static constexpr int memset_val = 0;
-            fill_ev = exec_q.submit([&](sycl::handler &cgh) {
-                cgh.depends_on(depends);
+            fill_ev =
+                sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+                    cgh.depends_on(depends);
 
-                cgh.memset(reinterpret_cast<void *>(dst_p), memset_val,
-                           nelems * sizeof(dstTy));
-            });
+                    cgh.memset(reinterpret_cast<void *>(dst_p), memset_val,
+                               nelems * sizeof(dstTy));
+                });
         }
         else {
             using dpnp::tensor::kernels::constructors::full_contig_impl;

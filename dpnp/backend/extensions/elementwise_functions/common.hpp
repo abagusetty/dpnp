@@ -562,35 +562,36 @@ sycl::event
     resTy1 *res1_tp = reinterpret_cast<resTy1 *>(res1_p);
     resTy2 *res2_tp = reinterpret_cast<resTy2 *>(res2_p);
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev = dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        if (is_aligned<required_alignment>(arg_p) &&
-            is_aligned<required_alignment>(res1_p) &&
-            is_aligned<required_alignment>(res2_p)) {
-            static constexpr bool enable_sg_loadstore = true;
-            using KernelName = BaseKernelName;
-            using Impl =
-                UnaryTwoOutputsContigFunctorT<argTy, resTy1, resTy2, vec_sz,
-                                              n_vecs, enable_sg_loadstore>;
+            if (is_aligned<required_alignment>(arg_p) &&
+                is_aligned<required_alignment>(res1_p) &&
+                is_aligned<required_alignment>(res2_p)) {
+                static constexpr bool enable_sg_loadstore = true;
+                using KernelName = BaseKernelName;
+                using Impl =
+                    UnaryTwoOutputsContigFunctorT<argTy, resTy1, resTy2, vec_sz,
+                                                  n_vecs, enable_sg_loadstore>;
 
-            cgh.parallel_for<KernelName>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                Impl(arg_tp, res1_tp, res2_tp, nelems));
-        }
-        else {
-            static constexpr bool disable_sg_loadstore = false;
-            using KernelName =
-                disabled_sg_loadstore_wrapper_krn<BaseKernelName>;
-            using Impl =
-                UnaryTwoOutputsContigFunctorT<argTy, resTy1, resTy2, vec_sz,
-                                              n_vecs, disable_sg_loadstore>;
+                cgh.parallel_for<KernelName>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    Impl(arg_tp, res1_tp, res2_tp, nelems));
+            }
+            else {
+                static constexpr bool disable_sg_loadstore = false;
+                using KernelName =
+                    disabled_sg_loadstore_wrapper_krn<BaseKernelName>;
+                using Impl =
+                    UnaryTwoOutputsContigFunctorT<argTy, resTy1, resTy2, vec_sz,
+                                                  n_vecs, disable_sg_loadstore>;
 
-            cgh.parallel_for<KernelName>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                Impl(arg_tp, res1_tp, res2_tp, nelems));
-        }
-    });
+                cgh.parallel_for<KernelName>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    Impl(arg_tp, res1_tp, res2_tp, nelems));
+            }
+        });
 
     return comp_ev;
 }
@@ -626,28 +627,29 @@ sycl::event unary_two_outputs_strided_impl(
     const std::vector<sycl::event> &depends,
     const std::vector<sycl::event> &additional_depends)
 {
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
-        cgh.depends_on(additional_depends);
+    sycl::event comp_ev = dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
+            cgh.depends_on(additional_depends);
 
-        using res1Ty = typename UnaryTwoOutputsType<argTy>::value_type1;
-        using res2Ty = typename UnaryTwoOutputsType<argTy>::value_type2;
-        using IndexerT =
-            typename dpnp::tensor::offset_utils::ThreeOffsets_StridedIndexer;
+            using res1Ty = typename UnaryTwoOutputsType<argTy>::value_type1;
+            using res2Ty = typename UnaryTwoOutputsType<argTy>::value_type2;
+            using IndexerT = typename dpnp::tensor::offset_utils::
+                ThreeOffsets_StridedIndexer;
 
-        const IndexerT indexer{nd, arg_offset, res1_offset, res2_offset,
-                               shape_and_strides};
+            const IndexerT indexer{nd, arg_offset, res1_offset, res2_offset,
+                                   shape_and_strides};
 
-        const argTy *arg_tp = reinterpret_cast<const argTy *>(arg_p);
-        res1Ty *res1_tp = reinterpret_cast<res1Ty *>(res1_p);
-        res2Ty *res2_tp = reinterpret_cast<res2Ty *>(res2_p);
+            const argTy *arg_tp = reinterpret_cast<const argTy *>(arg_p);
+            res1Ty *res1_tp = reinterpret_cast<res1Ty *>(res1_p);
+            res2Ty *res2_tp = reinterpret_cast<res2Ty *>(res2_p);
 
-        using Impl =
-            UnaryTwoOutputsStridedFunctorT<argTy, res1Ty, res2Ty, IndexerT>;
+            using Impl =
+                UnaryTwoOutputsStridedFunctorT<argTy, res1Ty, res2Ty, IndexerT>;
 
-        cgh.parallel_for<kernel_name<argTy, res1Ty, res2Ty, IndexerT>>(
-            {nelems}, Impl(arg_tp, res1_tp, res2_tp, indexer));
-    });
+            cgh.parallel_for<kernel_name<argTy, res1Ty, res2Ty, IndexerT>>(
+                {nelems}, Impl(arg_tp, res1_tp, res2_tp, indexer));
+        });
     return comp_ev;
 }
 
@@ -711,36 +713,39 @@ sycl::event
     resTy1 *res1_tp = reinterpret_cast<resTy1 *>(res1_p) + res1_offset;
     resTy2 *res2_tp = reinterpret_cast<resTy2 *>(res2_p) + res2_offset;
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev = dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        if (is_aligned<required_alignment>(arg1_tp) &&
-            is_aligned<required_alignment>(arg2_tp) &&
-            is_aligned<required_alignment>(res1_tp) &&
-            is_aligned<required_alignment>(res2_tp)) {
-            static constexpr bool enable_sg_loadstore = true;
-            using KernelName = BaseKernelName;
-            using Impl = BinaryTwoOutputsContigFunctorT<argTy1, argTy2, resTy1,
-                                                        resTy2, vec_sz, n_vecs,
-                                                        enable_sg_loadstore>;
+            if (is_aligned<required_alignment>(arg1_tp) &&
+                is_aligned<required_alignment>(arg2_tp) &&
+                is_aligned<required_alignment>(res1_tp) &&
+                is_aligned<required_alignment>(res2_tp)) {
+                static constexpr bool enable_sg_loadstore = true;
+                using KernelName = BaseKernelName;
+                using Impl =
+                    BinaryTwoOutputsContigFunctorT<argTy1, argTy2, resTy1,
+                                                   resTy2, vec_sz, n_vecs,
+                                                   enable_sg_loadstore>;
 
-            cgh.parallel_for<KernelName>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                Impl(arg1_tp, arg2_tp, res1_tp, res2_tp, nelems));
-        }
-        else {
-            static constexpr bool disable_sg_loadstore = false;
-            using KernelName =
-                disabled_sg_loadstore_wrapper_krn<BaseKernelName>;
-            using Impl = BinaryTwoOutputsContigFunctorT<argTy1, argTy2, resTy1,
-                                                        resTy2, vec_sz, n_vecs,
-                                                        disable_sg_loadstore>;
+                cgh.parallel_for<KernelName>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    Impl(arg1_tp, arg2_tp, res1_tp, res2_tp, nelems));
+            }
+            else {
+                static constexpr bool disable_sg_loadstore = false;
+                using KernelName =
+                    disabled_sg_loadstore_wrapper_krn<BaseKernelName>;
+                using Impl =
+                    BinaryTwoOutputsContigFunctorT<argTy1, argTy2, resTy1,
+                                                   resTy2, vec_sz, n_vecs,
+                                                   disable_sg_loadstore>;
 
-            cgh.parallel_for<KernelName>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                Impl(arg1_tp, arg2_tp, res1_tp, res2_tp, nelems));
-        }
-    });
+                cgh.parallel_for<KernelName>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    Impl(arg1_tp, arg2_tp, res1_tp, res2_tp, nelems));
+            }
+        });
     return comp_ev;
 }
 
@@ -780,32 +785,34 @@ sycl::event binary_two_outputs_strided_impl(
     const std::vector<sycl::event> &depends,
     const std::vector<sycl::event> &additional_depends)
 {
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
-        cgh.depends_on(additional_depends);
+    sycl::event comp_ev = dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
+            cgh.depends_on(additional_depends);
 
-        using resTy1 =
-            typename BinaryTwoOutputsType<argTy1, argTy2>::value_type1;
-        using resTy2 =
-            typename BinaryTwoOutputsType<argTy1, argTy2>::value_type2;
+            using resTy1 =
+                typename BinaryTwoOutputsType<argTy1, argTy2>::value_type1;
+            using resTy2 =
+                typename BinaryTwoOutputsType<argTy1, argTy2>::value_type2;
 
-        using IndexerT =
-            typename dpnp::tensor::offset_utils::FourOffsets_StridedIndexer;
+            using IndexerT =
+                typename dpnp::tensor::offset_utils::FourOffsets_StridedIndexer;
 
-        const IndexerT indexer{nd,          arg1_offset, arg2_offset,
-                               res1_offset, res2_offset, shape_and_strides};
+            const IndexerT indexer{nd,          arg1_offset, arg2_offset,
+                                   res1_offset, res2_offset, shape_and_strides};
 
-        const argTy1 *arg1_tp = reinterpret_cast<const argTy1 *>(arg1_p);
-        const argTy2 *arg2_tp = reinterpret_cast<const argTy2 *>(arg2_p);
-        resTy1 *res1_tp = reinterpret_cast<resTy1 *>(res1_p);
-        resTy2 *res2_tp = reinterpret_cast<resTy2 *>(res2_p);
+            const argTy1 *arg1_tp = reinterpret_cast<const argTy1 *>(arg1_p);
+            const argTy2 *arg2_tp = reinterpret_cast<const argTy2 *>(arg2_p);
+            resTy1 *res1_tp = reinterpret_cast<resTy1 *>(res1_p);
+            resTy2 *res2_tp = reinterpret_cast<resTy2 *>(res2_p);
 
-        using Impl = BinaryTwoOutputsStridedFunctorT<argTy1, argTy2, resTy1,
-                                                     resTy2, IndexerT>;
+            using Impl = BinaryTwoOutputsStridedFunctorT<argTy1, argTy2, resTy1,
+                                                         resTy2, IndexerT>;
 
-        cgh.parallel_for<kernel_name<argTy1, argTy2, resTy1, resTy2, IndexerT>>(
-            {nelems}, Impl(arg1_tp, arg2_tp, res1_tp, res2_tp, indexer));
-    });
+            cgh.parallel_for<
+                kernel_name<argTy1, argTy2, resTy1, resTy2, IndexerT>>(
+                {nelems}, Impl(arg1_tp, arg2_tp, res1_tp, res2_tp, indexer));
+        });
     return comp_ev;
 }
 

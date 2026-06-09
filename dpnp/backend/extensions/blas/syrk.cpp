@@ -37,6 +37,7 @@
 // dpnp tensor headers
 #include "utils/memory_overlap.hpp"
 #include "utils/output_validation.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_utils.hpp"
 
 #include "syrk.hpp"
@@ -134,19 +135,20 @@ sycl::event run_copy(sycl::queue &exec_q,
 {
     const sycl::device &dev = exec_q.get_device();
 
-    return exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    return dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        // two separate kernels are used to have better performance compared
-        // to gemm on both CPU and GPU
-        if (dev.is_gpu()) {
-            submit_copy_kernel<T, false>(res, ldc, n, is_row_major, cgh);
-        }
-        else {
-            assert(dev.is_cpu());
-            submit_copy_kernel<T, true>(res, ldc, n, is_row_major, cgh);
-        }
-    });
+            // two separate kernels are used to have better performance compared
+            // to gemm on both CPU and GPU
+            if (dev.is_gpu()) {
+                submit_copy_kernel<T, false>(res, ldc, n, is_row_major, cgh);
+            }
+            else {
+                assert(dev.is_cpu());
+                submit_copy_kernel<T, true>(res, ldc, n, is_row_major, cgh);
+            }
+        });
 }
 
 template <typename T>

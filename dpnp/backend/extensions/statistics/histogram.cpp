@@ -38,6 +38,7 @@
 #include "dpnp4pybind11.hpp"
 
 // dpnp tensor headers
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch.hpp"
 
 #include "histogram.hpp"
@@ -135,7 +136,8 @@ struct HistogramF
 
         const auto nd_range = make_ndrange(size, local_size, WorkPI);
 
-        return exec_q.submit([&](sycl::handler &cgh) {
+        return dpnp::tensor::sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                       &cgh) {
             cgh.depends_on(depends);
             constexpr uint32_t dims = 1;
 

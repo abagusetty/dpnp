@@ -33,6 +33,7 @@
 
 #include "bincount.hpp"
 #include "histogram_common.hpp"
+#include "utils/sycl_utils.hpp"
 
 using dpnp::tensor::usm_ndarray;
 
@@ -107,7 +108,8 @@ struct BincountF
         constexpr uint32_t WorkPI = 128; // empirically found number
         const auto nd_range = make_ndrange(size, local_size, WorkPI);
 
-        return exec_q.submit([&](sycl::handler &cgh) {
+        return dpnp::tensor::sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                       &cgh) {
             cgh.depends_on(depends);
             constexpr uint32_t dims = 1;
 

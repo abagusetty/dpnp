@@ -52,6 +52,7 @@
 #include "utils/memory_overlap.hpp"
 #include "utils/output_validation.hpp"
 #include "utils/sycl_alloc_utils.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch.hpp"
 #include "utils/type_utils.hpp"
 
@@ -398,7 +399,7 @@ std::vector<sycl::event>
         host_along_sh_st_shp->size());
 
     const sycl::event shared_ptr_cleanup_ev =
-        exec_q.submit([&](sycl::handler &cgh) {
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
             cgh.depends_on({device_along_sh_st_copy_ev,
                             device_orthog_sh_st_copy_ev,
                             device_ind_offsets_copy_ev,

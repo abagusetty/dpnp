@@ -53,6 +53,7 @@
 #include "utils/offset_utils.hpp"
 #include "utils/output_validation.hpp"
 #include "utils/sycl_alloc_utils.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch.hpp"
 #include "utils/type_utils.hpp"
 
@@ -103,28 +104,28 @@ sycl::event choose_impl(sycl::queue &q,
     const indTy *ind_tp = reinterpret_cast<const indTy *>(ind_cp);
     Ty *dst_tp = reinterpret_cast<Ty *>(dst_cp);
 
-    sycl::event choose_ev = q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event choose_ev =
+        dpnp::tensor::sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using InOutIndexerT =
-            dpnp::tensor::offset_utils::TwoOffsets_StridedIndexer;
-        const InOutIndexerT ind_out_indexer{nd, ind_offset, dst_offset,
-                                            shape_and_strides};
+            using InOutIndexerT =
+                dpnp::tensor::offset_utils::TwoOffsets_StridedIndexer;
+            const InOutIndexerT ind_out_indexer{nd, ind_offset, dst_offset,
+                                                shape_and_strides};
 
-        using NthChoiceIndexerT =
-            dpnp::kernels::choose::strides::NthStrideOffsetUnpacked;
-        const NthChoiceIndexerT choices_indexer{
-            nd, chc_offsets, shape_and_strides, shape_and_strides + 3 * nd};
+            using NthChoiceIndexerT =
+                dpnp::kernels::choose::strides::NthStrideOffsetUnpacked;
+            const NthChoiceIndexerT choices_indexer{
+                nd, chc_offsets, shape_and_strides, shape_and_strides + 3 * nd};
 
-        using ChooseFunc =
-            dpnp::kernels::choose::ChooseFunctor<ProjectorT, InOutIndexerT,
-                                                 NthChoiceIndexerT, indTy, Ty>;
+            using ChooseFunc = dpnp::kernels::choose::ChooseFunctor<
+                ProjectorT, InOutIndexerT, NthChoiceIndexerT, indTy, Ty>;
 
-        cgh.parallel_for<ChooseFunc>(sycl::range<1>(nelems),
-                                     ChooseFunc(ind_tp, dst_tp, chcs_cp, n_chcs,
-                                                ind_out_indexer,
-                                                choices_indexer));
-    });
+            cgh.parallel_for<ChooseFunc>(sycl::range<1>(nelems),
+                                         ChooseFunc(ind_tp, dst_tp, chcs_cp,
+                                                    n_chcs, ind_out_indexer,
+                                                    choices_indexer));
+        });
 
     return choose_ev;
 }
@@ -245,10 +246,11 @@ sycl::event async_shp_free(sycl::queue &exec_q,
     static_assert(n > 0, "async_shp_free requires at least one argument");
 
     const sycl::event &shared_ptr_cleanup_ev =
-        exec_q.submit([&](sycl::handler &cgh) {
-            cgh.depends_on(depends);
-            cgh.host_task([capture = std::tuple(std::move(shps)...)]() {});
-        });
+        dpnp::tensor::sycl_utils::submit_kernel(
+            exec_q, [&](sycl::handler &cgh) {
+                cgh.depends_on(depends);
+                cgh.host_task([capture = std::tuple(std::move(shps)...)]() {});
+            });
 
     return shared_ptr_cleanup_ev;
 }

@@ -216,14 +216,15 @@ sycl::event nan_to_num_strided_impl(sycl::queue &q,
         typename dpnp::tensor::offset_utils::TwoOffsets_StridedIndexer;
     const InOutIndexerT indexer{nd, in_offset, out_offset, shape_strides};
 
-    sycl::event comp_ev = q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev =
+        dpnp::tensor::sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using NanToNumFunc = NanToNumFunctor<T, scT, InOutIndexerT>;
-        cgh.parallel_for<NanToNumFunc>(
-            {nelems},
-            NanToNumFunc(in_tp, out_tp, indexer, nan, posinf, neginf));
-    });
+            using NanToNumFunc = NanToNumFunctor<T, scT, InOutIndexerT>;
+            cgh.parallel_for<NanToNumFunc>(
+                {nelems},
+                NanToNumFunc(in_tp, out_tp, indexer, nan, posinf, neginf));
+        });
     return comp_ev;
 }
 
@@ -255,31 +256,34 @@ sycl::event nan_to_num_contig_impl(sycl::queue &exec_q,
     const T *in_tp = reinterpret_cast<const T *>(in_cp);
     T *out_tp = reinterpret_cast<T *>(out_cp);
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev = dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using dpnp::tensor::kernels::alignment_utils::is_aligned;
-        using dpnp::tensor::kernels::alignment_utils::required_alignment;
-        if (is_aligned<required_alignment>(in_tp) &&
-            is_aligned<required_alignment>(out_tp)) {
-            constexpr bool enable_sg_loadstore = true;
-            using NanToNumFunc = NanToNumContigFunctor<T, scT, vec_sz, n_vecs,
-                                                       enable_sg_loadstore>;
+            using dpnp::tensor::kernels::alignment_utils::is_aligned;
+            using dpnp::tensor::kernels::alignment_utils::required_alignment;
+            if (is_aligned<required_alignment>(in_tp) &&
+                is_aligned<required_alignment>(out_tp)) {
+                constexpr bool enable_sg_loadstore = true;
+                using NanToNumFunc =
+                    NanToNumContigFunctor<T, scT, vec_sz, n_vecs,
+                                          enable_sg_loadstore>;
 
-            cgh.parallel_for<NanToNumFunc>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                NanToNumFunc(in_tp, out_tp, nelems, nan, posinf, neginf));
-        }
-        else {
-            constexpr bool disable_sg_loadstore = false;
-            using NanToNumFunc = NanToNumContigFunctor<T, scT, vec_sz, n_vecs,
-                                                       disable_sg_loadstore>;
+                cgh.parallel_for<NanToNumFunc>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    NanToNumFunc(in_tp, out_tp, nelems, nan, posinf, neginf));
+            }
+            else {
+                constexpr bool disable_sg_loadstore = false;
+                using NanToNumFunc =
+                    NanToNumContigFunctor<T, scT, vec_sz, n_vecs,
+                                          disable_sg_loadstore>;
 
-            cgh.parallel_for<NanToNumFunc>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                NanToNumFunc(in_tp, out_tp, nelems, nan, posinf, neginf));
-        }
-    });
+                cgh.parallel_for<NanToNumFunc>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    NanToNumFunc(in_tp, out_tp, nelems, nan, posinf, neginf));
+            }
+        });
 
     return comp_ev;
 }

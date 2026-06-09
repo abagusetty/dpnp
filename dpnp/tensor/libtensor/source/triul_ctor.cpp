@@ -49,6 +49,7 @@
 #include "utils/memory_overlap.hpp"
 #include "utils/output_validation.hpp"
 #include "utils/sycl_alloc_utils.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch.hpp"
 
 namespace py = pybind11;
@@ -209,18 +210,19 @@ std::pair<sycl::event, sycl::event>
                dev_shape_and_strides, k, depends, {copy_shape_and_strides});
     }
 
-    const auto &temporaries_cleanup_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(tri_ev);
-        const auto &ctx = exec_q.get_context();
-        using dpnp::tensor::alloc_utils::sycl_free_noexcept;
-        cgh.host_task(
-            [shp_host_shape_and_strides = std::move(shp_host_shape_and_strides),
-             dev_shape_and_strides, ctx]() {
+    const auto &temporaries_cleanup_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(tri_ev);
+            const auto &ctx = exec_q.get_context();
+            using dpnp::tensor::alloc_utils::sycl_free_noexcept;
+            cgh.host_task([shp_host_shape_and_strides =
+                               std::move(shp_host_shape_and_strides),
+                           dev_shape_and_strides, ctx]() {
                 // capture of shp_host_shape_and_strides ensure the underlying
                 // vector exists for the entire execution of copying kernel
                 sycl_free_noexcept(dev_shape_and_strides, ctx);
             });
-    });
+        });
     // since host_task now owns USM allocation, release ownership by smart
     // pointer
     dev_shape_and_strides_owner.release();

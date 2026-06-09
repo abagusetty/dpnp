@@ -46,6 +46,7 @@
 #include "kernels/elementwise_functions/interpolate.hpp"
 
 // dpnp tensor headers
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch.hpp"
 #include "utils/type_utils.hpp"
 
@@ -107,16 +108,17 @@ sycl::event interpolate_impl(sycl::queue &q,
     const T *right = static_cast<const T *>(vright);
     T *out = static_cast<T *>(vout);
 
-    sycl::event interpolate_ev = q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event interpolate_ev =
+        dpnp::tensor::sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using InterpolateFunc =
-            dpnp::kernels::interpolate::InterpolateFunctor<TCoord, T>;
+            using InterpolateFunc =
+                dpnp::kernels::interpolate::InterpolateFunctor<TCoord, T>;
 
-        cgh.parallel_for<InterpolateFunc>(
-            sycl::range<1>(n),
-            InterpolateFunc(x, idx, xp, fp, left, right, out, xp_size));
-    });
+            cgh.parallel_for<InterpolateFunc>(
+                sycl::range<1>(n),
+                InterpolateFunc(x, idx, xp, fp, left, right, out, xp_size));
+        });
 
     return interpolate_ev;
 }

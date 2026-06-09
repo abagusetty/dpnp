@@ -43,6 +43,7 @@
 
 // dpnp tensor headers
 #include "utils/output_validation.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch.hpp"
 #include "utils/type_utils.hpp"
 
@@ -66,13 +67,14 @@ sycl::event window_impl(sycl::queue &exec_q,
 
     T *res = reinterpret_cast<T *>(result);
 
-    sycl::event window_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event window_ev = dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using WindowKernel = Functor<T>;
-        cgh.parallel_for<WindowKernel>(sycl::range<1>(nelems),
-                                       WindowKernel(res, nelems));
-    });
+            using WindowKernel = Functor<T>;
+            cgh.parallel_for<WindowKernel>(sycl::range<1>(nelems),
+                                           WindowKernel(res, nelems));
+        });
 
     return window_ev;
 }

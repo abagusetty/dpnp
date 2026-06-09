@@ -43,6 +43,7 @@
 #include <pybind11/pybind11.h>
 
 #include "utils/output_validation.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch.hpp"
 
 #include "zeros_ctor.hpp"
@@ -82,12 +83,13 @@ sycl::event zeros_contig_impl(sycl::queue &exec_q,
 {
 
     static constexpr int memset_val(0);
-    sycl::event fill_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event fill_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        cgh.memset(reinterpret_cast<void *>(dst_p), memset_val,
-                   nelems * sizeof(dstTy));
-    });
+            cgh.memset(reinterpret_cast<void *>(dst_p), memset_val,
+                       nelems * sizeof(dstTy));
+        });
 
     return fill_ev;
 }

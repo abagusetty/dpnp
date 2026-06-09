@@ -57,6 +57,7 @@
 #include "utils/offset_utils.hpp"
 #include "utils/output_validation.hpp"
 #include "utils/sycl_alloc_utils.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch.hpp"
 
 #include "kernels/elementwise_functions/common.hpp"
@@ -214,7 +215,8 @@ sycl::event divide_by_scalar(sycl::queue &exec_q,
 {
     const scalarT sc_v = *reinterpret_cast<const scalarT *>(scalar_ptr);
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event comp_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         using BinOpT =

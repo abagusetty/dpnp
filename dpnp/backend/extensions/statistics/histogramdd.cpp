@@ -34,6 +34,7 @@
 
 #include "histogram_common.hpp"
 #include "histogramdd.hpp"
+#include "utils/sycl_utils.hpp"
 
 using dpnp::tensor::usm_ndarray;
 
@@ -188,7 +189,8 @@ struct HistogramddF
 
         const auto nd_range = make_ndrange(size, local_size, WorkPI);
 
-        return exec_q.submit([&](sycl::handler &cgh) {
+        return dpnp::tensor::sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                       &cgh) {
             cgh.depends_on(depends);
 
             auto dispatch_edges = [&](const uint32_t local_mem,

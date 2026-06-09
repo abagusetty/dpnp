@@ -39,6 +39,7 @@
 #include "ext/common.hpp"
 
 // dpnp tensor headers
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch.hpp"
 
 #include "sliding_dot_product1d.hpp"
@@ -77,7 +78,8 @@ struct SlidingDotProductF
 
         constexpr int32_t WorkPI = 4;
 
-        return exec_q.submit([&](sycl::handler &cgh) {
+        return dpnp::tensor::sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                       &cgh) {
             cgh.depends_on(depends);
 
             auto input = make_padded_span(ain, a_size, l_pad);
