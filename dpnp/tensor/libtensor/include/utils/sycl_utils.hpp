@@ -40,14 +40,53 @@
 #include <iterator>
 #include <limits>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <sycl/sycl.hpp>
+
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS)
+// eventless submit used by submit_kernel on in-order queues
+#include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
+#endif
 
 #include "math_utils.hpp"
 
 namespace dpnp::tensor::sycl_utils
 {
+
+/*! @brief Submit a command-group functor, returning the computation event.
+
+    On an in-order queue, submission is eventless (via the
+    sycl_ext_oneapi_enqueue_functions extension when available, otherwise a
+   plain submit whose event is discarded) and a default-constructed sycl::event
+   is returned. A default event behaves as an already-complete no-op, so callers
+    that chain it via cgh.depends_on(...) stay correct: in-order submission
+   order already enforces the dependency, and dpnp's Python layer discards the
+   event for in-order queues (dpctl's no-op SequentialOrderManager).
+
+    On an out-of-order queue, q.submit is used and the real event is returned,
+    so all existing dependency tracking remains load-bearing and unchanged.
+
+    The command-group functor ``cgf`` must call cgh.depends_on(depends) itself,
+    exactly as before. Works for both compute kernels and host_task command
+    groups. */
+template <typename CGF>
+inline sycl::event submit_kernel(sycl::queue &q, CGF &&cgf)
+{
+    if (q.is_in_order()) {
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS)
+        sycl::ext::oneapi::experimental::submit(q, std::forward<CGF>(cgf));
+#else
+        // Fallback: the returned event is intentionally dropped. Still correct
+        // because in-order ordering is implicit; only the optimization is lost.
+        static_cast<void>(q.submit(std::forward<CGF>(cgf)));
+#endif
+        return sycl::event{};
+    }
+    return q.submit(std::forward<CGF>(cgf));
+}
+
 namespace detail
 {
 template <typename...>

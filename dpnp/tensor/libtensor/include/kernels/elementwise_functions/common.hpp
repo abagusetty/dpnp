@@ -321,32 +321,33 @@ sycl::event unary_contig_impl(sycl::queue &exec_q,
     const argTy *arg_tp = reinterpret_cast<const argTy *>(arg_p);
     resTy *res_tp = reinterpret_cast<resTy *>(res_p);
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        if (is_aligned<required_alignment>(arg_p) &&
-            is_aligned<required_alignment>(res_p)) {
-            static constexpr bool enable_sg_loadstore = true;
-            using KernelName = BaseKernelName;
-            using Impl = ContigFunctorT<argTy, resTy, vec_sz, n_vecs,
-                                        enable_sg_loadstore>;
+            if (is_aligned<required_alignment>(arg_p) &&
+                is_aligned<required_alignment>(res_p)) {
+                static constexpr bool enable_sg_loadstore = true;
+                using KernelName = BaseKernelName;
+                using Impl = ContigFunctorT<argTy, resTy, vec_sz, n_vecs,
+                                            enable_sg_loadstore>;
 
-            cgh.parallel_for<KernelName>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                Impl(arg_tp, res_tp, nelems));
-        }
-        else {
-            static constexpr bool disable_sg_loadstore = false;
-            using KernelName =
-                disabled_sg_loadstore_wrapper_krn<BaseKernelName>;
-            using Impl = ContigFunctorT<argTy, resTy, vec_sz, n_vecs,
-                                        disable_sg_loadstore>;
+                cgh.parallel_for<KernelName>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    Impl(arg_tp, res_tp, nelems));
+            }
+            else {
+                static constexpr bool disable_sg_loadstore = false;
+                using KernelName =
+                    disabled_sg_loadstore_wrapper_krn<BaseKernelName>;
+                using Impl = ContigFunctorT<argTy, resTy, vec_sz, n_vecs,
+                                            disable_sg_loadstore>;
 
-            cgh.parallel_for<KernelName>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                Impl(arg_tp, res_tp, nelems));
-        }
-    });
+                cgh.parallel_for<KernelName>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    Impl(arg_tp, res_tp, nelems));
+            }
+        });
 
     return comp_ev;
 }
@@ -367,24 +368,26 @@ sycl::event
                        const std::vector<sycl::event> &depends,
                        const std::vector<sycl::event> &additional_depends)
 {
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
-        cgh.depends_on(additional_depends);
+    sycl::event comp_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
+            cgh.depends_on(additional_depends);
 
-        using resTy = typename UnaryOutputType<argTy>::value_type;
-        using IndexerT =
-            typename dpnp::tensor::offset_utils::TwoOffsets_StridedIndexer;
+            using resTy = typename UnaryOutputType<argTy>::value_type;
+            using IndexerT =
+                typename dpnp::tensor::offset_utils::TwoOffsets_StridedIndexer;
 
-        const IndexerT indexer{nd, arg_offset, res_offset, shape_and_strides};
+            const IndexerT indexer{nd, arg_offset, res_offset,
+                                   shape_and_strides};
 
-        const argTy *arg_tp = reinterpret_cast<const argTy *>(arg_p);
-        resTy *res_tp = reinterpret_cast<resTy *>(res_p);
+            const argTy *arg_tp = reinterpret_cast<const argTy *>(arg_p);
+            resTy *res_tp = reinterpret_cast<resTy *>(res_p);
 
-        using Impl = StridedFunctorT<argTy, resTy, IndexerT>;
+            using Impl = StridedFunctorT<argTy, resTy, IndexerT>;
 
-        cgh.parallel_for<kernel_name<argTy, resTy, IndexerT>>(
-            {nelems}, Impl(arg_tp, res_tp, indexer));
-    });
+            cgh.parallel_for<kernel_name<argTy, resTy, IndexerT>>(
+                {nelems}, Impl(arg_tp, res_tp, indexer));
+        });
     return comp_ev;
 }
 
@@ -804,33 +807,34 @@ sycl::event binary_contig_impl(sycl::queue &exec_q,
         reinterpret_cast<const argTy2 *>(arg2_p) + arg2_offset;
     resTy *res_tp = reinterpret_cast<resTy *>(res_p) + res_offset;
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        if (is_aligned<required_alignment>(arg1_tp) &&
-            is_aligned<required_alignment>(arg2_tp) &&
-            is_aligned<required_alignment>(res_tp)) {
-            static constexpr bool enable_sg_loadstore = true;
-            using KernelName = BaseKernelName;
-            using Impl = BinaryContigFunctorT<argTy1, argTy2, resTy, vec_sz,
-                                              n_vecs, enable_sg_loadstore>;
+            if (is_aligned<required_alignment>(arg1_tp) &&
+                is_aligned<required_alignment>(arg2_tp) &&
+                is_aligned<required_alignment>(res_tp)) {
+                static constexpr bool enable_sg_loadstore = true;
+                using KernelName = BaseKernelName;
+                using Impl = BinaryContigFunctorT<argTy1, argTy2, resTy, vec_sz,
+                                                  n_vecs, enable_sg_loadstore>;
 
-            cgh.parallel_for<KernelName>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                Impl(arg1_tp, arg2_tp, res_tp, nelems));
-        }
-        else {
-            static constexpr bool disable_sg_loadstore = false;
-            using KernelName =
-                disabled_sg_loadstore_wrapper_krn<BaseKernelName>;
-            using Impl = BinaryContigFunctorT<argTy1, argTy2, resTy, vec_sz,
-                                              n_vecs, disable_sg_loadstore>;
+                cgh.parallel_for<KernelName>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    Impl(arg1_tp, arg2_tp, res_tp, nelems));
+            }
+            else {
+                static constexpr bool disable_sg_loadstore = false;
+                using KernelName =
+                    disabled_sg_loadstore_wrapper_krn<BaseKernelName>;
+                using Impl = BinaryContigFunctorT<argTy1, argTy2, resTy, vec_sz,
+                                                  n_vecs, disable_sg_loadstore>;
 
-            cgh.parallel_for<KernelName>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                Impl(arg1_tp, arg2_tp, res_tp, nelems));
-        }
-    });
+                cgh.parallel_for<KernelName>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    Impl(arg1_tp, arg2_tp, res_tp, nelems));
+            }
+        });
     return comp_ev;
 }
 
@@ -859,7 +863,8 @@ sycl::event
                         const std::vector<sycl::event> &depends,
                         const std::vector<sycl::event> &additional_depends)
 {
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event comp_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
         cgh.depends_on(additional_depends);
 
@@ -934,7 +939,8 @@ sycl::event binary_contig_matrix_contig_row_broadcast_impl(
 
     const std::size_t lws = 128;
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event comp_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(make_padded_vec_ev);
 
         auto lwsRange = sycl::range<1>(lws);
@@ -1009,7 +1015,8 @@ sycl::event binary_contig_row_contig_matrix_broadcast_impl(
 
     const std::size_t lws = 128;
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event comp_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(make_padded_vec_ev);
 
         auto lwsRange = sycl::range<1>(lws);

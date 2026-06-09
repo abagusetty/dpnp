@@ -179,22 +179,23 @@ sycl::event copy_and_cast_generic_impl(
     dpnp::tensor::type_utils::validate_type_for_device<dstTy>(q);
     dpnp::tensor::type_utils::validate_type_for_device<srcTy>(q);
 
-    sycl::event copy_and_cast_ev = q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
-        cgh.depends_on(additional_depends);
+    sycl::event copy_and_cast_ev =
+        sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
+            cgh.depends_on(additional_depends);
 
-        const TwoOffsets_StridedIndexer indexer{nd, src_offset, dst_offset,
-                                                shape_and_strides};
-        const srcTy *src_tp = reinterpret_cast<const srcTy *>(src_p);
-        dstTy *dst_tp = reinterpret_cast<dstTy *>(dst_p);
+            const TwoOffsets_StridedIndexer indexer{nd, src_offset, dst_offset,
+                                                    shape_and_strides};
+            const srcTy *src_tp = reinterpret_cast<const srcTy *>(src_p);
+            dstTy *dst_tp = reinterpret_cast<dstTy *>(dst_p);
 
-        cgh.parallel_for<class copy_cast_generic_kernel<
-            srcTy, dstTy, TwoOffsets_StridedIndexer>>(
-            sycl::range<1>(nelems),
-            GenericCopyFunctor<srcTy, dstTy, Caster<srcTy, dstTy>,
-                               TwoOffsets_StridedIndexer>(src_tp, dst_tp,
-                                                          indexer));
-    });
+            cgh.parallel_for<class copy_cast_generic_kernel<
+                srcTy, dstTy, TwoOffsets_StridedIndexer>>(
+                sycl::range<1>(nelems),
+                GenericCopyFunctor<srcTy, dstTy, Caster<srcTy, dstTy>,
+                                   TwoOffsets_StridedIndexer>(src_tp, dst_tp,
+                                                              indexer));
+        });
 
     return copy_and_cast_ev;
 }
@@ -336,46 +337,47 @@ sycl::event copy_and_cast_contig_impl(sycl::queue &q,
     dpnp::tensor::type_utils::validate_type_for_device<dstTy>(q);
     dpnp::tensor::type_utils::validate_type_for_device<srcTy>(q);
 
-    sycl::event copy_and_cast_ev = q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event copy_and_cast_ev =
+        sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        const srcTy *src_tp = reinterpret_cast<const srcTy *>(src_cp);
-        dstTy *dst_tp = reinterpret_cast<dstTy *>(dst_cp);
+            const srcTy *src_tp = reinterpret_cast<const srcTy *>(src_cp);
+            dstTy *dst_tp = reinterpret_cast<dstTy *>(dst_cp);
 
-        std::size_t lws = 64;
-        static constexpr std::uint32_t vec_sz = 4;
-        static constexpr std::uint32_t n_vecs = 2;
-        const std::size_t n_groups =
-            ((nelems + lws * n_vecs * vec_sz - 1) / (lws * n_vecs * vec_sz));
-        const auto gws_range = sycl::range<1>(n_groups * lws);
-        const auto lws_range = sycl::range<1>(lws);
+            std::size_t lws = 64;
+            static constexpr std::uint32_t vec_sz = 4;
+            static constexpr std::uint32_t n_vecs = 2;
+            const std::size_t n_groups = ((nelems + lws * n_vecs * vec_sz - 1) /
+                                          (lws * n_vecs * vec_sz));
+            const auto gws_range = sycl::range<1>(n_groups * lws);
+            const auto lws_range = sycl::range<1>(lws);
 
-        if (is_aligned<required_alignment>(src_cp) &&
-            is_aligned<required_alignment>(dst_cp)) {
-            static constexpr bool enable_sg_loadstore = true;
-            using KernelName =
-                copy_cast_contig_kernel<srcTy, dstTy, vec_sz, n_vecs>;
+            if (is_aligned<required_alignment>(src_cp) &&
+                is_aligned<required_alignment>(dst_cp)) {
+                static constexpr bool enable_sg_loadstore = true;
+                using KernelName =
+                    copy_cast_contig_kernel<srcTy, dstTy, vec_sz, n_vecs>;
 
-            cgh.parallel_for<KernelName>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                ContigCopyFunctor<srcTy, dstTy, Caster<srcTy, dstTy>, vec_sz,
-                                  n_vecs, enable_sg_loadstore>(nelems, src_tp,
-                                                               dst_tp));
-        }
-        else {
-            static constexpr bool disable_sg_loadstore = false;
-            using InnerKernelName =
-                copy_cast_contig_kernel<srcTy, dstTy, vec_sz, n_vecs>;
-            using KernelName =
-                disabled_sg_loadstore_wrapper_krn<InnerKernelName>;
+                cgh.parallel_for<KernelName>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    ContigCopyFunctor<srcTy, dstTy, Caster<srcTy, dstTy>,
+                                      vec_sz, n_vecs, enable_sg_loadstore>(
+                        nelems, src_tp, dst_tp));
+            }
+            else {
+                static constexpr bool disable_sg_loadstore = false;
+                using InnerKernelName =
+                    copy_cast_contig_kernel<srcTy, dstTy, vec_sz, n_vecs>;
+                using KernelName =
+                    disabled_sg_loadstore_wrapper_krn<InnerKernelName>;
 
-            cgh.parallel_for<KernelName>(
-                sycl::nd_range<1>(gws_range, lws_range),
-                ContigCopyFunctor<srcTy, dstTy, Caster<srcTy, dstTy>, vec_sz,
-                                  n_vecs, disable_sg_loadstore>(nelems, src_tp,
-                                                                dst_tp));
-        }
-    });
+                cgh.parallel_for<KernelName>(
+                    sycl::nd_range<1>(gws_range, lws_range),
+                    ContigCopyFunctor<srcTy, dstTy, Caster<srcTy, dstTy>,
+                                      vec_sz, n_vecs, disable_sg_loadstore>(
+                        nelems, src_tp, dst_tp));
+            }
+        });
 
     return copy_and_cast_ev;
 }
@@ -474,20 +476,21 @@ sycl::event copy_and_cast_nd_specialized_impl(
     dpnp::tensor::type_utils::validate_type_for_device<dstTy>(q);
     dpnp::tensor::type_utils::validate_type_for_device<srcTy>(q);
 
-    sycl::event copy_and_cast_ev = q.submit([&](sycl::handler &cgh) {
-        using IndexerT = TwoOffsets_FixedDimStridedIndexer<nd>;
-        const IndexerT indexer{shape, src_strides, dst_strides, src_offset,
-                               dst_offset};
-        const srcTy *src_tp = reinterpret_cast<const srcTy *>(src_p);
-        dstTy *dst_tp = reinterpret_cast<dstTy *>(dst_p);
+    sycl::event copy_and_cast_ev =
+        sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
+            using IndexerT = TwoOffsets_FixedDimStridedIndexer<nd>;
+            const IndexerT indexer{shape, src_strides, dst_strides, src_offset,
+                                   dst_offset};
+            const srcTy *src_tp = reinterpret_cast<const srcTy *>(src_p);
+            dstTy *dst_tp = reinterpret_cast<dstTy *>(dst_p);
 
-        cgh.depends_on(depends);
-        cgh.parallel_for<
-            class copy_cast_generic_kernel<srcTy, dstTy, IndexerT>>(
-            sycl::range<1>(nelems),
-            GenericCopyFunctor<srcTy, dstTy, Caster<srcTy, dstTy>, IndexerT>(
-                src_tp, dst_tp, indexer));
-    });
+            cgh.depends_on(depends);
+            cgh.parallel_for<
+                class copy_cast_generic_kernel<srcTy, dstTy, IndexerT>>(
+                sycl::range<1>(nelems),
+                GenericCopyFunctor<srcTy, dstTy, Caster<srcTy, dstTy>,
+                                   IndexerT>(src_tp, dst_tp, indexer));
+        });
 
     return copy_and_cast_ev;
 }
@@ -847,30 +850,33 @@ sycl::event
 {
     dpnp::tensor::type_utils::validate_type_for_device<Ty>(q);
 
-    sycl::event copy_for_reshape_ev = q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event copy_for_reshape_ev =
+        sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        // packed_shapes_and_strides:
-        //   USM array of size 2*(src_nd + dst_nd)
-        //   [ src_shape; src_strides; dst_shape; dst_strides ]
+            // packed_shapes_and_strides:
+            //   USM array of size 2*(src_nd + dst_nd)
+            //   [ src_shape; src_strides; dst_shape; dst_strides ]
 
-        const ssize_t *src_shape_and_strides =
-            const_cast<const ssize_t *>(packed_shapes_and_strides);
+            const ssize_t *src_shape_and_strides =
+                const_cast<const ssize_t *>(packed_shapes_and_strides);
 
-        const ssize_t *dst_shape_and_strides = const_cast<const ssize_t *>(
-            packed_shapes_and_strides + (2 * src_nd));
+            const ssize_t *dst_shape_and_strides = const_cast<const ssize_t *>(
+                packed_shapes_and_strides + (2 * src_nd));
 
-        const StridedIndexer src_indexer{src_nd, 0, src_shape_and_strides};
-        const StridedIndexer dst_indexer{dst_nd, 0, dst_shape_and_strides};
+            const StridedIndexer src_indexer{src_nd, 0, src_shape_and_strides};
+            const StridedIndexer dst_indexer{dst_nd, 0, dst_shape_and_strides};
 
-        using KernelName =
-            copy_for_reshape_generic_kernel<Ty, StridedIndexer, StridedIndexer>;
+            using KernelName =
+                copy_for_reshape_generic_kernel<Ty, StridedIndexer,
+                                                StridedIndexer>;
 
-        cgh.parallel_for<KernelName>(
-            sycl::range<1>(nelems),
-            GenericCopyForReshapeFunctor<Ty, StridedIndexer, StridedIndexer>(
-                src_p, dst_p, src_indexer, dst_indexer));
-    });
+            cgh.parallel_for<KernelName>(
+                sycl::range<1>(nelems),
+                GenericCopyForReshapeFunctor<Ty, StridedIndexer,
+                                             StridedIndexer>(
+                    src_p, dst_p, src_indexer, dst_indexer));
+        });
 
     return copy_for_reshape_ev;
 }
@@ -1048,39 +1054,41 @@ sycl::event copy_for_roll_strided_impl(sycl::queue &q,
 {
     dpnp::tensor::type_utils::validate_type_for_device<Ty>(q);
 
-    sycl::event copy_for_roll_ev = q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event copy_for_roll_ev =
+        sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        // packed_shapes_and_strides:
-        //   USM array of size 3 * nd
-        //   [ common_shape; src_strides; dst_strides ]
+            // packed_shapes_and_strides:
+            //   USM array of size 3 * nd
+            //   [ common_shape; src_strides; dst_strides ]
 
-        const StridedIndexer src_indexer{nd, src_offset,
-                                         packed_shapes_and_strides};
-        const LeftRolled1DTransformer left_roll_transformer{shift, nelems};
+            const StridedIndexer src_indexer{nd, src_offset,
+                                             packed_shapes_and_strides};
+            const LeftRolled1DTransformer left_roll_transformer{shift, nelems};
 
-        using CompositeIndexerT =
-            CompositionIndexer<StridedIndexer, LeftRolled1DTransformer>;
+            using CompositeIndexerT =
+                CompositionIndexer<StridedIndexer, LeftRolled1DTransformer>;
 
-        const CompositeIndexerT rolled_src_indexer(src_indexer,
-                                                   left_roll_transformer);
+            const CompositeIndexerT rolled_src_indexer(src_indexer,
+                                                       left_roll_transformer);
 
-        UnpackedStridedIndexer dst_indexer{nd, dst_offset,
-                                           packed_shapes_and_strides,
-                                           packed_shapes_and_strides + 2 * nd};
+            UnpackedStridedIndexer dst_indexer{
+                nd, dst_offset, packed_shapes_and_strides,
+                packed_shapes_and_strides + 2 * nd};
 
-        using KernelName = copy_for_roll_strided_kernel<Ty, CompositeIndexerT,
-                                                        UnpackedStridedIndexer>;
+            using KernelName =
+                copy_for_roll_strided_kernel<Ty, CompositeIndexerT,
+                                             UnpackedStridedIndexer>;
 
-        const Ty *src_tp = reinterpret_cast<const Ty *>(src_p);
-        Ty *dst_tp = reinterpret_cast<Ty *>(dst_p);
+            const Ty *src_tp = reinterpret_cast<const Ty *>(src_p);
+            Ty *dst_tp = reinterpret_cast<Ty *>(dst_p);
 
-        cgh.parallel_for<KernelName>(
-            sycl::range<1>(nelems),
-            StridedCopyForRollFunctor<Ty, CompositeIndexerT,
-                                      UnpackedStridedIndexer>(
-                src_tp, dst_tp, rolled_src_indexer, dst_indexer));
-    });
+            cgh.parallel_for<KernelName>(
+                sycl::range<1>(nelems),
+                StridedCopyForRollFunctor<Ty, CompositeIndexerT,
+                                          UnpackedStridedIndexer>(
+                    src_tp, dst_tp, rolled_src_indexer, dst_indexer));
+        });
 
     return copy_for_roll_ev;
 }
@@ -1132,28 +1140,30 @@ sycl::event copy_for_roll_contig_impl(sycl::queue &q,
 {
     dpnp::tensor::type_utils::validate_type_for_device<Ty>(q);
 
-    sycl::event copy_for_roll_ev = q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event copy_for_roll_ev =
+        sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        static constexpr NoOpIndexer src_indexer{};
-        const LeftRolled1DTransformer roller{shift, nelems};
+            static constexpr NoOpIndexer src_indexer{};
+            const LeftRolled1DTransformer roller{shift, nelems};
 
-        const CompositionIndexer<NoOpIndexer, LeftRolled1DTransformer>
-            left_rolled_src_indexer{src_indexer, roller};
-        static constexpr NoOpIndexer dst_indexer{};
+            const CompositionIndexer<NoOpIndexer, LeftRolled1DTransformer>
+                left_rolled_src_indexer{src_indexer, roller};
+            static constexpr NoOpIndexer dst_indexer{};
 
-        using KernelName = copy_for_roll_contig_kernel<Ty>;
+            using KernelName = copy_for_roll_contig_kernel<Ty>;
 
-        const Ty *src_tp = reinterpret_cast<const Ty *>(src_p) + src_offset;
-        Ty *dst_tp = reinterpret_cast<Ty *>(dst_p) + dst_offset;
+            const Ty *src_tp = reinterpret_cast<const Ty *>(src_p) + src_offset;
+            Ty *dst_tp = reinterpret_cast<Ty *>(dst_p) + dst_offset;
 
-        cgh.parallel_for<KernelName>(
-            sycl::range<1>(nelems),
-            StridedCopyForRollFunctor<
-                Ty, CompositionIndexer<NoOpIndexer, LeftRolled1DTransformer>,
-                NoOpIndexer>(src_tp, dst_tp, left_rolled_src_indexer,
-                             dst_indexer));
-    });
+            cgh.parallel_for<KernelName>(
+                sycl::range<1>(nelems),
+                StridedCopyForRollFunctor<
+                    Ty,
+                    CompositionIndexer<NoOpIndexer, LeftRolled1DTransformer>,
+                    NoOpIndexer>(src_tp, dst_tp, left_rolled_src_indexer,
+                                 dst_indexer));
+        });
 
     return copy_for_roll_ev;
 }
@@ -1217,39 +1227,41 @@ sycl::event copy_for_roll_ndshift_strided_impl(
 {
     dpnp::tensor::type_utils::validate_type_for_device<Ty>(q);
 
-    sycl::event copy_for_roll_ev = q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event copy_for_roll_ev =
+        sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        // packed_shapes_and_strides_and_shifts:
-        //   USM array of size 4 * nd
-        //   [ common_shape; src_strides; dst_strides; shifts ]
+            // packed_shapes_and_strides_and_shifts:
+            //   USM array of size 4 * nd
+            //   [ common_shape; src_strides; dst_strides; shifts ]
 
-        const ssize_t *shape_ptr = packed_shapes_and_strides_and_shifts;
-        const ssize_t *src_strides_ptr =
-            packed_shapes_and_strides_and_shifts + nd;
-        const ssize_t *dst_strides_ptr =
-            packed_shapes_and_strides_and_shifts + 2 * nd;
-        const ssize_t *shifts_ptr =
-            packed_shapes_and_strides_and_shifts + 3 * nd;
+            const ssize_t *shape_ptr = packed_shapes_and_strides_and_shifts;
+            const ssize_t *src_strides_ptr =
+                packed_shapes_and_strides_and_shifts + nd;
+            const ssize_t *dst_strides_ptr =
+                packed_shapes_and_strides_and_shifts + 2 * nd;
+            const ssize_t *shifts_ptr =
+                packed_shapes_and_strides_and_shifts + 3 * nd;
 
-        const RolledNDIndexer src_indexer{nd, shape_ptr, src_strides_ptr,
-                                          shifts_ptr, src_offset};
+            const RolledNDIndexer src_indexer{nd, shape_ptr, src_strides_ptr,
+                                              shifts_ptr, src_offset};
 
-        const UnpackedStridedIndexer dst_indexer{nd, dst_offset, shape_ptr,
-                                                 dst_strides_ptr};
+            const UnpackedStridedIndexer dst_indexer{nd, dst_offset, shape_ptr,
+                                                     dst_strides_ptr};
 
-        using KernelName = copy_for_roll_strided_kernel<Ty, RolledNDIndexer,
-                                                        UnpackedStridedIndexer>;
+            using KernelName =
+                copy_for_roll_strided_kernel<Ty, RolledNDIndexer,
+                                             UnpackedStridedIndexer>;
 
-        const Ty *src_tp = reinterpret_cast<const Ty *>(src_p);
-        Ty *dst_tp = reinterpret_cast<Ty *>(dst_p);
+            const Ty *src_tp = reinterpret_cast<const Ty *>(src_p);
+            Ty *dst_tp = reinterpret_cast<Ty *>(dst_p);
 
-        cgh.parallel_for<KernelName>(
-            sycl::range<1>(nelems),
-            StridedCopyForRollFunctor<Ty, RolledNDIndexer,
-                                      UnpackedStridedIndexer>(
-                src_tp, dst_tp, src_indexer, dst_indexer));
-    });
+            cgh.parallel_for<KernelName>(
+                sycl::range<1>(nelems),
+                StridedCopyForRollFunctor<Ty, RolledNDIndexer,
+                                          UnpackedStridedIndexer>(
+                    src_tp, dst_tp, src_indexer, dst_indexer));
+        });
 
     return copy_for_roll_ev;
 }

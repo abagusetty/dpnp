@@ -44,6 +44,8 @@
 
 #include <sycl/sycl.hpp>
 
+#include "sycl_utils.hpp"
+
 namespace dpnp::tensor::alloc_utils
 {
 template <typename T>
@@ -203,15 +205,21 @@ sycl::event async_smart_free(sycl::queue &exec_q,
     dels.reserve(n);
     (dels.emplace_back(unique_pointers.get_deleter()), ...);
 
-    sycl::event ht_e = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    // On an in-order queue this submission is eventless and returns a default
+    // sycl::event{}: the cleanup host task is ordered after the kernels that
+    // used these temporaries (submitted earlier on the same in-order queue), so
+    // no explicit completion event is needed. On an out-of-order queue the real
+    // event is returned, preserving the existing dependency contract.
+    sycl::event ht_e =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        cgh.host_task([ptrs = std::move(ptrs), dels = std::move(dels)]() {
-            for (std::size_t i = 0; i < ptrs.size(); ++i) {
-                dels[i](ptrs[i]);
-            }
+            cgh.host_task([ptrs = std::move(ptrs), dels = std::move(dels)]() {
+                for (std::size_t i = 0; i < ptrs.size(); ++i) {
+                    dels[i](ptrs[i]);
+                }
+            });
         });
-    });
 
     // Upon successful submission of host_task, USM allocations are owned
     // by the host_task. Release smart pointer ownership to avoid double
