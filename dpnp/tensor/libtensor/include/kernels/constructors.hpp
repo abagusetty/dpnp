@@ -44,6 +44,7 @@
 #include "dpnp_tensor_types.hpp"
 #include "utils/offset_utils.hpp"
 #include "utils/strided_iters.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_utils.hpp"
 
 namespace dpnp::tensor::kernels::constructors
@@ -120,12 +121,13 @@ sycl::event lin_space_step_impl(sycl::queue &exec_q,
                                 const std::vector<sycl::event> &depends)
 {
     dpnp::tensor::type_utils::validate_type_for_device<Ty>(exec_q);
-    sycl::event lin_space_step_event = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
-        cgh.parallel_for<linear_sequence_step_kernel<Ty>>(
-            sycl::range<1>{nelems},
-            LinearSequenceStepFunctor<Ty>(array_data, start_v, step_v));
-    });
+    sycl::event lin_space_step_event =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
+            cgh.parallel_for<linear_sequence_step_kernel<Ty>>(
+                sycl::range<1>{nelems},
+                LinearSequenceStepFunctor<Ty>(array_data, start_v, step_v));
+        });
 
     return lin_space_step_event;
 }
@@ -218,23 +220,26 @@ sycl::event lin_space_affine_impl(sycl::queue &exec_q,
         exec_q.get_device().has(sycl::aspect::fp64);
     const std::size_t den = (include_endpoint) ? nelems - 1 : nelems;
 
-    sycl::event lin_space_affine_event = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
-        if (device_supports_doubles) {
-            using KernelName = linear_sequence_affine_kernel<Ty, double>;
-            using Impl = LinearSequenceAffineFunctor<Ty, double>;
+    sycl::event lin_space_affine_event =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
+            if (device_supports_doubles) {
+                using KernelName = linear_sequence_affine_kernel<Ty, double>;
+                using Impl = LinearSequenceAffineFunctor<Ty, double>;
 
-            cgh.parallel_for<KernelName>(sycl::range<1>{nelems},
-                                         Impl(array_data, start_v, end_v, den));
-        }
-        else {
-            using KernelName = linear_sequence_affine_kernel<Ty, float>;
-            using Impl = LinearSequenceAffineFunctor<Ty, float>;
+                cgh.parallel_for<KernelName>(
+                    sycl::range<1>{nelems},
+                    Impl(array_data, start_v, end_v, den));
+            }
+            else {
+                using KernelName = linear_sequence_affine_kernel<Ty, float>;
+                using Impl = LinearSequenceAffineFunctor<Ty, float>;
 
-            cgh.parallel_for<KernelName>(sycl::range<1>{nelems},
-                                         Impl(array_data, start_v, end_v, den));
-        }
-    });
+                cgh.parallel_for<KernelName>(
+                    sycl::range<1>{nelems},
+                    Impl(array_data, start_v, end_v, den));
+            }
+        });
 
     return lin_space_affine_event;
 }
@@ -264,7 +269,7 @@ sycl::event full_contig_impl(sycl::queue &q,
                              const std::vector<sycl::event> &depends)
 {
     dpnp::tensor::type_utils::validate_type_for_device<dstTy>(q);
-    sycl::event fill_ev = q.submit([&](sycl::handler &cgh) {
+    sycl::event fill_ev = sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
         cgh.depends_on(depends);
         dstTy *p = reinterpret_cast<dstTy *>(dst_p);
         cgh.fill<dstTy>(p, fill_v, nelems);
@@ -328,7 +333,7 @@ sycl::event full_strided_impl(sycl::queue &q,
     using dpnp::tensor::offset_utils::StridedIndexer;
     const StridedIndexer strided_indexer(nd, 0, shape_strides);
 
-    sycl::event fill_ev = q.submit([&](sycl::handler &cgh) {
+    sycl::event fill_ev = sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
         cgh.depends_on(depends);
 
         using KernelName = full_strided_kernel<dstTy>;
@@ -412,17 +417,18 @@ sycl::event eye_impl(sycl::queue &exec_q,
                      const std::vector<sycl::event> &depends)
 {
     dpnp::tensor::type_utils::validate_type_for_device<Ty>(exec_q);
-    sycl::event eye_event = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event eye_event =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using KernelName = eye_kernel<Ty>;
-        using Impl = EyeFunctor<Ty>;
+            using KernelName = eye_kernel<Ty>;
+            using Impl = EyeFunctor<Ty>;
 
-        cgh.parallel_for<KernelName>(
-            sycl::range<2>{static_cast<std::size_t>(rows),
-                           static_cast<std::size_t>(cols)},
-            Impl(array_data, k, stride0, stride1));
-    });
+            cgh.parallel_for<KernelName>(
+                sycl::range<2>{static_cast<std::size_t>(rows),
+                               static_cast<std::size_t>(cols)},
+                Impl(array_data, k, stride0, stride1));
+        });
 
     return eye_event;
 }
@@ -501,7 +507,8 @@ sycl::event tri_impl(sycl::queue &exec_q,
 
     dpnp::tensor::type_utils::validate_type_for_device<Ty>(exec_q);
 
-    sycl::event tri_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event tri_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                   &cgh) {
         cgh.depends_on(depends);
         cgh.depends_on(additional_depends);
 

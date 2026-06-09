@@ -48,6 +48,7 @@
 #include "kernels/dpnp_tensor_types.hpp"
 #include "kernels/sorting/search_sorted_detail.hpp"
 #include "kernels/sorting/sort_utils.hpp"
+#include "utils/sycl_utils.hpp"
 
 namespace dpnp::tensor::kernels
 {
@@ -352,7 +353,8 @@ sycl::event
     const std::size_t n_segments =
         quotient_ceil(sort_nelems, conseq_nelems_sorted);
 
-    sycl::event base_sort = q.submit([&](sycl::handler &cgh) {
+    sycl::event base_sort = sycl_utils::submit_kernel(q, [&](sycl::handler
+                                                                 &cgh) {
         cgh.depends_on(depends);
 
         const sycl::range<1> gRange{iter_nelems * n_segments};
@@ -439,7 +441,8 @@ sycl::event sort_over_work_group_contig_impl(
 
     const std::size_t n_segments = quotient_ceil(sort_nelems, nelems_wg_sorts);
 
-    sycl::event base_sort_ev = q.submit([&](sycl::handler &cgh) {
+    sycl::event base_sort_ev = sycl_utils::submit_kernel(q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         cgh.use_kernel_bundle(kb);
@@ -542,7 +545,7 @@ inline sycl::event tie_events(sycl::queue &q,
     if (depends.size() == 1)
         return depends[0];
 
-    sycl::event e = q.submit([&](sycl::handler &cgh) {
+    sycl::event e = sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
         cgh.depends_on(depends);
         using KernelName = vacuous_krn;
         cgh.single_task<KernelName>([]() {});
@@ -601,7 +604,8 @@ sycl::event
     while (chunks_merged * chunk_size < sort_nelems) {
         sycl::event local_dep = dep_ev;
 
-        sycl::event merge_ev = q.submit([&](sycl::handler &cgh) {
+        sycl::event merge_ev = sycl_utils::submit_kernel(q, [&](sycl::handler
+                                                                    &cgh) {
             if (used_depends) {
                 cgh.depends_on(local_dep);
             }
@@ -680,14 +684,15 @@ sycl::event
     }
 
     if (needs_copy) {
-        sycl::event copy_ev = q.submit([&](sycl::handler &cgh) {
-            cgh.depends_on(dep_ev);
+        sycl::event copy_ev =
+            sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
+                cgh.depends_on(dep_ev);
 
-            sycl::accessor temp_acc{temp_buf, cgh, sycl::read_only};
-            auto output_acc = GetWriteDiscardAccess<Acc>{}(output, cgh);
+                sycl::accessor temp_acc{temp_buf, cgh, sycl::read_only};
+                auto output_acc = GetWriteDiscardAccess<Acc>{}(output, cgh);
 
-            cgh.copy(temp_acc, output_acc);
-        });
+                cgh.copy(temp_acc, output_acc);
+            });
         dep_ev = copy_ev;
     }
 

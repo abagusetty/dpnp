@@ -43,6 +43,7 @@
 #include "kernels/sorting/search_sorted_detail.hpp"
 #include "utils/offset_utils.hpp"
 #include "utils/rich_comparisons.hpp"
+#include "utils/sycl_utils.hpp"
 
 namespace dpnp::tensor::kernels
 {
@@ -140,7 +141,8 @@ sycl::event isin_contig_impl(sycl::queue &exec_q,
 
     bool *out_tp = reinterpret_cast<bool *>(out_cp) + out_offset;
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event comp_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         using KernelName = class isin_contig_impl_krn<T>;
@@ -208,7 +210,8 @@ sycl::event isin_strided_impl(
 
     bool *out_tp = reinterpret_cast<bool *>(out_cp);
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event comp_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         sycl::range<1> gRange(needles_nelems);

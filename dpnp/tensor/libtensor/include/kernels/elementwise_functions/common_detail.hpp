@@ -37,6 +37,8 @@
 
 #include <sycl/sycl.hpp>
 
+#include "utils/sycl_utils.hpp"
+
 namespace dpnp::tensor::kernels::elementwise_detail
 {
 template <typename T>
@@ -51,18 +53,19 @@ sycl::event
                            size_t padded_vec_sz,
                            const std::vector<sycl::event> &dependent_events)
 {
-    sycl::event populate_padded_vec_ev = exec_q.submit([&](sycl::handler &cgh) {
-        // ensure vec contains actual data
-        cgh.depends_on(dependent_events);
+    sycl::event populate_padded_vec_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            // ensure vec contains actual data
+            cgh.depends_on(dependent_events);
 
-        sycl::range<1> gRange{padded_vec_sz};
+            sycl::range<1> gRange{padded_vec_sz};
 
-        cgh.parallel_for<class populate_padded_vec_krn<T>>(
-            gRange, [=](sycl::id<1> id) {
-                std::size_t i = id[0];
-                padded_vec[i] = vec[i % vec_sz];
-            });
-    });
+            cgh.parallel_for<class populate_padded_vec_krn<T>>(
+                gRange, [=](sycl::id<1> id) {
+                    std::size_t i = id[0];
+                    padded_vec[i] = vec[i % vec_sz];
+                });
+        });
 
     return populate_padded_vec_ev;
 }

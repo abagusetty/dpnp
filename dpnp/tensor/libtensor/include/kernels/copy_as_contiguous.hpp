@@ -179,7 +179,8 @@ sycl::event submit_c_contiguous_copy(sycl::queue &exec_q,
     const std::size_t n_groups =
         (nelems + nelems_per_group - 1) / (nelems_per_group);
 
-    sycl::event copy_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event copy_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
         cgh.use_kernel_bundle(kb);
 
@@ -321,7 +322,7 @@ sycl::event as_c_contiguous_batch_of_square_matrices_impl(
         as_contig_batch_of_square_matrices_krn<T, BatchIndexerT,
                                                private_tile_size, lws1>;
 
-    sycl::event e = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event e = sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
         cgh.depends_on(depends);
 
         sycl::local_accessor<T, 1> local_block(block_size * block_size, cgh);

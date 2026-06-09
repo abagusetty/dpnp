@@ -183,7 +183,8 @@ sycl::event where_contig_impl(sycl::queue &q,
     const T *x2_tp = reinterpret_cast<const T *>(x2_cp);
     T *dst_tp = reinterpret_cast<T *>(dst_cp);
 
-    sycl::event where_ev = q.submit([&](sycl::handler &cgh) {
+    sycl::event where_ev = sycl_utils::submit_kernel(q, [&](sycl::handler
+                                                                &cgh) {
         cgh.depends_on(depends);
 
         std::size_t lws = 64;
@@ -296,7 +297,8 @@ sycl::event where_strided_impl(sycl::queue &q,
     const T *x2_tp = reinterpret_cast<const T *>(x2_cp);
     T *dst_tp = reinterpret_cast<T *>(dst_cp);
 
-    sycl::event where_ev = q.submit([&](sycl::handler &cgh) {
+    sycl::event where_ev = sycl_utils::submit_kernel(q, [&](sycl::handler
+                                                                &cgh) {
         cgh.depends_on(depends);
 
         const FourOffsets_StridedIndexer indexer{

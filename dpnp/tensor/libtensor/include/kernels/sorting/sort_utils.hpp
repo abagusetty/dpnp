@@ -41,6 +41,8 @@
 
 #include <sycl/sycl.hpp>
 
+#include "utils/sycl_utils.hpp"
+
 namespace dpnp::tensor::kernels::sort_utils_detail
 {
 
@@ -60,7 +62,7 @@ sycl::event iota_impl(sycl::queue &exec_q,
     sycl::range<1> lRange{lws};
     sycl::nd_range<1> ndRange{gRange, lRange};
 
-    sycl::event e = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event e = sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
         cgh.depends_on(dependent_events);
         cgh.parallel_for<KernelName>(ndRange, [=](sycl::nd_item<1> it) {
             const std::size_t gid = it.get_global_linear_id();
@@ -115,28 +117,29 @@ sycl::event map_back_impl(sycl::queue &exec_q,
     sycl::range<1> gRange{n_groups * lws};
     sycl::nd_range<1> ndRange{gRange, lRange};
 
-    sycl::event map_back_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(dependent_events);
+    sycl::event map_back_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(dependent_events);
 
-        cgh.parallel_for<KernelName>(ndRange, [=](sycl::nd_item<1> it) {
-            const std::size_t gid = it.get_global_linear_id();
-            const auto &sg = it.get_sub_group();
-            const std::uint32_t lane_id = sg.get_local_id()[0];
-            const std::uint32_t sg_size = sg.get_max_local_range()[0];
+            cgh.parallel_for<KernelName>(ndRange, [=](sycl::nd_item<1> it) {
+                const std::size_t gid = it.get_global_linear_id();
+                const auto &sg = it.get_sub_group();
+                const std::uint32_t lane_id = sg.get_local_id()[0];
+                const std::uint32_t sg_size = sg.get_max_local_range()[0];
 
-            const std::size_t start_id = (gid - lane_id) * n_wi + lane_id;
+                const std::size_t start_id = (gid - lane_id) * n_wi + lane_id;
 
 #pragma unroll
-            for (std::uint32_t i = 0; i < n_wi; ++i) {
-                const std::size_t data_id = start_id + i * sg_size;
+                for (std::uint32_t i = 0; i < n_wi; ++i) {
+                    const std::size_t data_id = start_id + i * sg_size;
 
-                if (data_id < nelems) {
-                    const IndexTy linear_index = flat_index_data[data_id];
-                    reduced_index_data[data_id] = (linear_index % row_size);
+                    if (data_id < nelems) {
+                        const IndexTy linear_index = flat_index_data[data_id];
+                        reduced_index_data[data_id] = (linear_index % row_size);
+                    }
                 }
-            }
+            });
         });
-    });
 
     return map_back_ev;
 }

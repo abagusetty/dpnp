@@ -41,6 +41,7 @@
 
 #include "dpnp_tensor_types.hpp"
 #include "utils/offset_utils.hpp"
+#include "utils/sycl_utils.hpp"
 
 namespace dpnp::tensor::kernels::repeat
 {
@@ -152,7 +153,8 @@ sycl::event
                             ssize_t reps_stride,
                             const std::vector<sycl::event> &depends)
 {
-    sycl::event repeat_ev = q.submit([&](sycl::handler &cgh) {
+    sycl::event repeat_ev = sycl_utils::submit_kernel(q, [&](sycl::handler
+                                                                 &cgh) {
         cgh.depends_on(depends);
 
         const T *src_tp = reinterpret_cast<const T *>(src_cp);
@@ -229,7 +231,8 @@ sycl::event repeat_by_sequence_1d_impl(sycl::queue &q,
                                        ssize_t reps_stride,
                                        const std::vector<sycl::event> &depends)
 {
-    sycl::event repeat_ev = q.submit([&](sycl::handler &cgh) {
+    sycl::event repeat_ev = sycl_utils::submit_kernel(q, [&](sycl::handler
+                                                                 &cgh) {
         cgh.depends_on(depends);
 
         const T *src_tp = reinterpret_cast<const T *>(src_cp);
@@ -357,7 +360,8 @@ sycl::event repeat_by_scalar_impl(sycl::queue &q,
                                   ssize_t dst_axis_stride,
                                   const std::vector<sycl::event> &depends)
 {
-    sycl::event repeat_ev = q.submit([&](sycl::handler &cgh) {
+    sycl::event repeat_ev = sycl_utils::submit_kernel(q, [&](sycl::handler
+                                                                 &cgh) {
         cgh.depends_on(depends);
 
         const T *src_tp = reinterpret_cast<const T *>(src_cp);
@@ -420,7 +424,8 @@ sycl::event repeat_by_scalar_1d_impl(sycl::queue &q,
                                      ssize_t dst_stride,
                                      const std::vector<sycl::event> &depends)
 {
-    sycl::event repeat_ev = q.submit([&](sycl::handler &cgh) {
+    sycl::event repeat_ev = sycl_utils::submit_kernel(q, [&](sycl::handler
+                                                                 &cgh) {
         cgh.depends_on(depends);
 
         const T *src_tp = reinterpret_cast<const T *>(src_cp);

@@ -326,7 +326,8 @@ sycl::event
                                ssize_t lhs_offset,
                                const std::vector<sycl::event> &depends = {})
 {
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event comp_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         const std::size_t lws = 128;
@@ -386,23 +387,25 @@ sycl::event binary_inplace_strided_impl(
     const std::vector<sycl::event> &depends,
     const std::vector<sycl::event> &additional_depends)
 {
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
-        cgh.depends_on(additional_depends);
+    sycl::event comp_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
+            cgh.depends_on(additional_depends);
 
-        using IndexerT =
-            typename dpnp::tensor::offset_utils::TwoOffsets_StridedIndexer;
+            using IndexerT =
+                typename dpnp::tensor::offset_utils::TwoOffsets_StridedIndexer;
 
-        const IndexerT indexer{nd, rhs_offset, lhs_offset, shape_and_strides};
+            const IndexerT indexer{nd, rhs_offset, lhs_offset,
+                                   shape_and_strides};
 
-        const argTy *arg_tp = reinterpret_cast<const argTy *>(rhs_p);
-        resTy *res_tp = reinterpret_cast<resTy *>(lhs_p);
+            const argTy *arg_tp = reinterpret_cast<const argTy *>(rhs_p);
+            resTy *res_tp = reinterpret_cast<resTy *>(lhs_p);
 
-        using Impl = BinaryInplaceStridedFunctorT<argTy, resTy, IndexerT>;
+            using Impl = BinaryInplaceStridedFunctorT<argTy, resTy, IndexerT>;
 
-        cgh.parallel_for<kernel_name<argTy, resTy, IndexerT>>(
-            {nelems}, Impl(arg_tp, res_tp, indexer));
-    });
+            cgh.parallel_for<kernel_name<argTy, resTy, IndexerT>>(
+                {nelems}, Impl(arg_tp, res_tp, indexer));
+        });
     return comp_ev;
 }
 
@@ -449,20 +452,21 @@ sycl::event binary_inplace_row_matrix_broadcast_impl(
 
     const std::size_t lws = 128;
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(make_padded_vec_ev);
+    sycl::event comp_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(make_padded_vec_ev);
 
-        auto lwsRange = sycl::range<1>(lws);
-        std::size_t n_elems = n0 * n1;
-        std::size_t n_groups = (n_elems + lws - 1) / lws;
-        auto gwsRange = sycl::range<1>(n_groups * lws);
+            auto lwsRange = sycl::range<1>(lws);
+            std::size_t n_elems = n0 * n1;
+            std::size_t n_groups = (n_elems + lws - 1) / lws;
+            auto gwsRange = sycl::range<1>(n_groups * lws);
 
-        using Impl = BinaryInplaceRowMatrixBroadcastFunctorT<argT, resT>;
+            using Impl = BinaryInplaceRowMatrixBroadcastFunctorT<argT, resT>;
 
-        cgh.parallel_for<class kernel_name<argT, resT>>(
-            sycl::nd_range<1>(gwsRange, lwsRange),
-            Impl(padded_vec, mat, n_elems, n1));
-    });
+            cgh.parallel_for<class kernel_name<argT, resT>>(
+                sycl::nd_range<1>(gwsRange, lwsRange),
+                Impl(padded_vec, mat, n_elems, n1));
+        });
 
     sycl::event tmp_cleanup_ev = dpnp::tensor::alloc_utils::async_smart_free(
         exec_q, {comp_ev}, padded_vec_owner);

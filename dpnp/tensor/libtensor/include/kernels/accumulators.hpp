@@ -226,103 +226,107 @@ sycl::event inclusive_scan_base_step_blocked(
 {
     acc_groups = ceiling_quotient<std::size_t>(acc_nelems, n_wi * wg_size);
 
-    sycl::event inc_scan_phase1_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event inc_scan_phase1_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using slmT = sycl::local_accessor<outputT, 1>;
+            using slmT = sycl::local_accessor<outputT, 1>;
 
-        auto gws = sycl::range<1>(iter_nelems * acc_groups * wg_size);
-        auto lws = sycl::range<1>(wg_size);
+            auto gws = sycl::range<1>(iter_nelems * acc_groups * wg_size);
+            auto lws = sycl::range<1>(wg_size);
 
-        auto ndRange = sycl::nd_range<1>(gws, lws);
+            auto ndRange = sycl::nd_range<1>(gws, lws);
 
-        slmT slm_iscan_tmp(lws, cgh);
+            slmT slm_iscan_tmp(lws, cgh);
 
-        using KernelName = inclusive_scan_iter_local_scan_blocked_krn<
-            inputT, outputT, n_wi, IterIndexerT, InpIndexerT, OutIndexerT,
-            TransformerT, ScanOpT, include_initial>;
+            using KernelName = inclusive_scan_iter_local_scan_blocked_krn<
+                inputT, outputT, n_wi, IterIndexerT, InpIndexerT, OutIndexerT,
+                TransformerT, ScanOpT, include_initial>;
 
-        cgh.parallel_for<KernelName>(ndRange, [=, slm_iscan_tmp =
-                                                      std::move(slm_iscan_tmp)](
-                                                  sycl::nd_item<1> it) {
-            const std::size_t gid = it.get_global_id(0);
-            const std::size_t lid = it.get_local_id(0);
+            cgh.parallel_for<KernelName>(ndRange, [=, slm_iscan_tmp = std::move(
+                                                          slm_iscan_tmp)](
+                                                      sycl::nd_item<1> it) {
+                const std::size_t gid = it.get_global_id(0);
+                const std::size_t lid = it.get_local_id(0);
 
-            const std::uint32_t wg_size = it.get_local_range(0);
-            const std::size_t reduce_chunks = acc_groups * wg_size;
-            const std::size_t iter_gid = gid / reduce_chunks;
-            const std::size_t chunk_gid = gid - (iter_gid * reduce_chunks);
+                const std::uint32_t wg_size = it.get_local_range(0);
+                const std::size_t reduce_chunks = acc_groups * wg_size;
+                const std::size_t iter_gid = gid / reduce_chunks;
+                const std::size_t chunk_gid = gid - (iter_gid * reduce_chunks);
 
-            const std::size_t i = chunk_gid * n_wi;
-            const auto &iter_offsets = iter_indexer(iter_gid);
-            const auto &inp_iter_offset = iter_offsets.get_first_offset();
-            const auto &out_iter_offset = iter_offsets.get_second_offset();
+                const std::size_t i = chunk_gid * n_wi;
+                const auto &iter_offsets = iter_indexer(iter_gid);
+                const auto &inp_iter_offset = iter_offsets.get_first_offset();
+                const auto &out_iter_offset = iter_offsets.get_second_offset();
 
-            std::array<outputT, n_wi> local_iscan;
+                std::array<outputT, n_wi> local_iscan;
 
 #pragma unroll
-            for (nwiT m_wi = 0; m_wi < n_wi; ++m_wi) {
-                const std::size_t i_m_wi = i + m_wi;
-                if constexpr (!include_initial) {
+                for (nwiT m_wi = 0; m_wi < n_wi; ++m_wi) {
+                    const std::size_t i_m_wi = i + m_wi;
+                    if constexpr (!include_initial) {
+                        local_iscan[m_wi] =
+                            (i_m_wi < acc_nelems)
+                                ? transformer(
+                                      input[inp_iter_offset +
+                                            inp_indexer(s0 + s1 * i_m_wi)])
+                                : identity;
+                    }
+                    else {
+                        // shift input to the left by a single element relative
+                        // to output
+                        local_iscan[m_wi] =
+                            (i_m_wi < acc_nelems && i_m_wi > 0)
+                                ? transformer(
+                                      input[inp_iter_offset +
+                                            inp_indexer((s0 + s1 * i_m_wi) -
+                                                        1)])
+                                : identity;
+                    }
+                }
+
+#pragma unroll
+                for (nwiT m_wi = 1; m_wi < n_wi; ++m_wi) {
                     local_iscan[m_wi] =
-                        (i_m_wi < acc_nelems)
-                            ? transformer(input[inp_iter_offset +
-                                                inp_indexer(s0 + s1 * i_m_wi)])
-                            : identity;
+                        scan_op(local_iscan[m_wi], local_iscan[m_wi - 1]);
+                }
+                // local_iscan is now result of
+                // inclusive scan of locally stored inputs
+
+                outputT wg_iscan_val;
+                if constexpr (can_use_inclusive_scan_over_group<
+                                  ScanOpT, outputT>::value) {
+                    wg_iscan_val = sycl::inclusive_scan_over_group(
+                        it.get_group(), local_iscan.back(), scan_op, identity);
                 }
                 else {
-                    // shift input to the left by a single element relative to
-                    // output
-                    local_iscan[m_wi] =
-                        (i_m_wi < acc_nelems && i_m_wi > 0)
-                            ? transformer(
-                                  input[inp_iter_offset +
-                                        inp_indexer((s0 + s1 * i_m_wi) - 1)])
-                            : identity;
+                    wg_iscan_val = su_ns::custom_inclusive_scan_over_group(
+                        it.get_group(), it.get_sub_group(), slm_iscan_tmp,
+                        local_iscan.back(), identity, scan_op);
+                    // ensure all finished reading from SLM, to avoid race
+                    // condition with subsequent writes into SLM
+                    it.barrier(sycl::access::fence_space::local_space);
                 }
-            }
 
-#pragma unroll
-            for (nwiT m_wi = 1; m_wi < n_wi; ++m_wi) {
-                local_iscan[m_wi] =
-                    scan_op(local_iscan[m_wi], local_iscan[m_wi - 1]);
-            }
-            // local_iscan is now result of
-            // inclusive scan of locally stored inputs
-
-            outputT wg_iscan_val;
-            if constexpr (can_use_inclusive_scan_over_group<ScanOpT,
-                                                            outputT>::value) {
-                wg_iscan_val = sycl::inclusive_scan_over_group(
-                    it.get_group(), local_iscan.back(), scan_op, identity);
-            }
-            else {
-                wg_iscan_val = su_ns::custom_inclusive_scan_over_group(
-                    it.get_group(), it.get_sub_group(), slm_iscan_tmp,
-                    local_iscan.back(), identity, scan_op);
-                // ensure all finished reading from SLM, to avoid race condition
-                // with subsequent writes into SLM
+                slm_iscan_tmp[(lid + 1) % wg_size] = wg_iscan_val;
                 it.barrier(sycl::access::fence_space::local_space);
-            }
-
-            slm_iscan_tmp[(lid + 1) % wg_size] = wg_iscan_val;
-            it.barrier(sycl::access::fence_space::local_space);
-            const outputT modifier = (lid == 0) ? identity : slm_iscan_tmp[lid];
+                const outputT modifier =
+                    (lid == 0) ? identity : slm_iscan_tmp[lid];
 
 #pragma unroll
-            for (nwiT m_wi = 0; m_wi < n_wi; ++m_wi) {
-                local_iscan[m_wi] = scan_op(local_iscan[m_wi], modifier);
-            }
+                for (nwiT m_wi = 0; m_wi < n_wi; ++m_wi) {
+                    local_iscan[m_wi] = scan_op(local_iscan[m_wi], modifier);
+                }
 
-            const std::size_t start = std::min(i, acc_nelems);
-            const std::size_t end = std::min(i + n_wi, acc_nelems);
-            const nwiT m_max = static_cast<nwiT>(end - start);
-            for (nwiT m_wi = 0; m_wi < m_max; ++m_wi) {
-                output[out_iter_offset + out_indexer(i + m_wi)] =
-                    local_iscan[m_wi];
-            }
+                const std::size_t start = std::min(i, acc_nelems);
+                const std::size_t end = std::min(i + n_wi, acc_nelems);
+                const nwiT m_max = static_cast<nwiT>(end - start);
+                for (nwiT m_wi = 0; m_wi < m_max; ++m_wi) {
+                    output[out_iter_offset + out_indexer(i + m_wi)] =
+                        local_iscan[m_wi];
+                }
+            });
         });
-    });
 
     return inc_scan_phase1_ev;
 }
@@ -358,166 +362,172 @@ sycl::event inclusive_scan_base_step_striped(
     acc_groups =
         ceiling_quotient<std::size_t>(acc_nelems, reduce_nelems_per_wg);
 
-    sycl::event inc_scan_phase1_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event inc_scan_phase1_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using slmT = sycl::local_accessor<outputT, 1>;
+            using slmT = sycl::local_accessor<outputT, 1>;
 
-        const auto &gRange = sycl::range<1>{iter_nelems * acc_groups * wg_size};
-        const auto &lRange = sycl::range<1>{wg_size};
+            const auto &gRange =
+                sycl::range<1>{iter_nelems * acc_groups * wg_size};
+            const auto &lRange = sycl::range<1>{wg_size};
 
-        const auto &ndRange = sycl::nd_range<1>{gRange, lRange};
+            const auto &ndRange = sycl::nd_range<1>{gRange, lRange};
 
-        slmT slm_iscan_tmp(reduce_nelems_per_wg, cgh);
+            slmT slm_iscan_tmp(reduce_nelems_per_wg, cgh);
 
-        using KernelName = inclusive_scan_iter_local_scan_striped_krn<
-            inputT, outputT, n_wi, IterIndexerT, InpIndexerT, OutIndexerT,
-            TransformerT, ScanOpT, include_initial>;
+            using KernelName = inclusive_scan_iter_local_scan_striped_krn<
+                inputT, outputT, n_wi, IterIndexerT, InpIndexerT, OutIndexerT,
+                TransformerT, ScanOpT, include_initial>;
 
-        cgh.parallel_for<KernelName>(ndRange, [=, slm_iscan_tmp =
-                                                      std::move(slm_iscan_tmp)](
-                                                  sycl::nd_item<1> it) {
-            const std::uint32_t lid = it.get_local_linear_id();
-            const std::uint32_t wg_size = it.get_local_range(0);
+            cgh.parallel_for<KernelName>(ndRange, [=, slm_iscan_tmp = std::move(
+                                                          slm_iscan_tmp)](
+                                                      sycl::nd_item<1> it) {
+                const std::uint32_t lid = it.get_local_linear_id();
+                const std::uint32_t wg_size = it.get_local_range(0);
 
-            const auto &sg = it.get_sub_group();
-            const std::uint32_t sgSize = sg.get_max_local_range()[0];
-            const std::size_t sgroup_id = sg.get_group_id()[0];
-            const std::uint32_t lane_id = sg.get_local_id()[0];
+                const auto &sg = it.get_sub_group();
+                const std::uint32_t sgSize = sg.get_max_local_range()[0];
+                const std::size_t sgroup_id = sg.get_group_id()[0];
+                const std::uint32_t lane_id = sg.get_local_id()[0];
 
-            const std::size_t flat_group_id = it.get_group(0);
-            const std::size_t iter_gid = flat_group_id / acc_groups;
-            const std::size_t acc_group_id =
-                flat_group_id - (iter_gid * acc_groups);
+                const std::size_t flat_group_id = it.get_group(0);
+                const std::size_t iter_gid = flat_group_id / acc_groups;
+                const std::size_t acc_group_id =
+                    flat_group_id - (iter_gid * acc_groups);
 
-            const auto &iter_offsets = iter_indexer(iter_gid);
-            const auto &inp_iter_offset = iter_offsets.get_first_offset();
-            const auto &out_iter_offset = iter_offsets.get_second_offset();
+                const auto &iter_offsets = iter_indexer(iter_gid);
+                const auto &inp_iter_offset = iter_offsets.get_first_offset();
+                const auto &out_iter_offset = iter_offsets.get_second_offset();
 
-            std::array<outputT, n_wi> local_iscan{};
+                std::array<outputT, n_wi> local_iscan{};
 
-            const std::size_t inp_id0 = acc_group_id * n_wi * wg_size +
-                                        sgroup_id * n_wi * sgSize + lane_id;
+                const std::size_t inp_id0 = acc_group_id * n_wi * wg_size +
+                                            sgroup_id * n_wi * sgSize + lane_id;
 
 #pragma unroll
-            for (nwiT m_wi = 0; m_wi < n_wi; ++m_wi) {
-                const std::size_t inp_id = inp_id0 + m_wi * sgSize;
-                if constexpr (!include_initial) {
-                    local_iscan[m_wi] =
-                        (inp_id < acc_nelems)
-                            ? transformer(input[inp_iter_offset +
-                                                inp_indexer(s0 + s1 * inp_id)])
-                            : identity;
+                for (nwiT m_wi = 0; m_wi < n_wi; ++m_wi) {
+                    const std::size_t inp_id = inp_id0 + m_wi * sgSize;
+                    if constexpr (!include_initial) {
+                        local_iscan[m_wi] =
+                            (inp_id < acc_nelems)
+                                ? transformer(
+                                      input[inp_iter_offset +
+                                            inp_indexer(s0 + s1 * inp_id)])
+                                : identity;
+                    }
+                    else {
+                        // shift input to the left by a single element relative
+                        // to output
+                        local_iscan[m_wi] =
+                            (inp_id < acc_nelems && inp_id > 0)
+                                ? transformer(
+                                      input[inp_iter_offset +
+                                            inp_indexer((s0 + s1 * inp_id) -
+                                                        1)])
+                                : identity;
+                    }
                 }
-                else {
-                    // shift input to the left by a single element relative to
-                    // output
-                    local_iscan[m_wi] =
-                        (inp_id < acc_nelems && inp_id > 0)
-                            ? transformer(
-                                  input[inp_iter_offset +
-                                        inp_indexer((s0 + s1 * inp_id) - 1)])
-                            : identity;
-                }
-            }
 
-            // change layout from striped to blocked
-            {
+                // change layout from striped to blocked
                 {
-                    const std::uint32_t local_offset0 = lid * n_wi;
+                    {
+                        const std::uint32_t local_offset0 = lid * n_wi;
 #pragma unroll
-                    for (std::uint32_t i = 0; i < n_wi; ++i) {
-                        slm_iscan_tmp[local_offset0 + i] = local_iscan[i];
+                        for (std::uint32_t i = 0; i < n_wi; ++i) {
+                            slm_iscan_tmp[local_offset0 + i] = local_iscan[i];
+                        }
+
+                        it.barrier(sycl::access::fence_space::local_space);
                     }
 
+                    {
+                        const std::uint32_t block_offset =
+                            sgroup_id * sgSize * n_wi;
+                        const std::uint32_t disp0 = lane_id * n_wi;
+#pragma unroll
+                        for (nwiT i = 0; i < n_wi; ++i) {
+                            const std::uint32_t disp = disp0 + i;
+
+                            // disp == lane_id1 + i1 * sgSize;
+                            const std::uint32_t i1 = disp / sgSize;
+                            const std::uint32_t lane_id1 = disp - i1 * sgSize;
+
+                            const std::uint32_t disp_exchanged =
+                                (lane_id1 * n_wi + i1);
+
+                            local_iscan[i] =
+                                slm_iscan_tmp[block_offset + disp_exchanged];
+                        }
+
+                        it.barrier(sycl::access::fence_space::local_space);
+                    }
+                }
+
+#pragma unroll
+                for (nwiT m_wi = 1; m_wi < n_wi; ++m_wi) {
+                    local_iscan[m_wi] =
+                        scan_op(local_iscan[m_wi], local_iscan[m_wi - 1]);
+                }
+                // local_iscan is now result of
+                // inclusive scan of locally stored inputs
+
+                outputT wg_iscan_val;
+                if constexpr (can_use_inclusive_scan_over_group<
+                                  ScanOpT, outputT>::value) {
+                    wg_iscan_val = sycl::inclusive_scan_over_group(
+                        it.get_group(), local_iscan.back(), scan_op, identity);
+                }
+                else {
+                    wg_iscan_val = su_ns::custom_inclusive_scan_over_group(
+                        it.get_group(), sg, slm_iscan_tmp, local_iscan.back(),
+                        identity, scan_op);
+                    // ensure all finished reading from SLM, to avoid race
+                    // condition with subsequent writes into SLM
                     it.barrier(sycl::access::fence_space::local_space);
+                }
+
+                slm_iscan_tmp[(lid + 1) % wg_size] = wg_iscan_val;
+                it.barrier(sycl::access::fence_space::local_space);
+                const outputT modifier =
+                    (lid == 0) ? identity : slm_iscan_tmp[lid];
+
+#pragma unroll
+                for (nwiT m_wi = 0; m_wi < n_wi; ++m_wi) {
+                    local_iscan[m_wi] = scan_op(local_iscan[m_wi], modifier);
+                }
+
+                it.barrier(sycl::access::fence_space::local_space);
+
+                // convert back to blocked layout
+                {
+                    {
+                        const std::uint32_t local_offset0 = lid * n_wi;
+#pragma unroll
+                        for (nwiT m_wi = 0; m_wi < n_wi; ++m_wi) {
+                            slm_iscan_tmp[local_offset0 + m_wi] =
+                                local_iscan[m_wi];
+                        }
+
+                        it.barrier(sycl::access::fence_space::local_space);
+                    }
                 }
 
                 {
                     const std::uint32_t block_offset =
-                        sgroup_id * sgSize * n_wi;
-                    const std::uint32_t disp0 = lane_id * n_wi;
-#pragma unroll
-                    for (nwiT i = 0; i < n_wi; ++i) {
-                        const std::uint32_t disp = disp0 + i;
-
-                        // disp == lane_id1 + i1 * sgSize;
-                        const std::uint32_t i1 = disp / sgSize;
-                        const std::uint32_t lane_id1 = disp - i1 * sgSize;
-
-                        const std::uint32_t disp_exchanged =
-                            (lane_id1 * n_wi + i1);
-
-                        local_iscan[i] =
-                            slm_iscan_tmp[block_offset + disp_exchanged];
-                    }
-
-                    it.barrier(sycl::access::fence_space::local_space);
-                }
-            }
-
-#pragma unroll
-            for (nwiT m_wi = 1; m_wi < n_wi; ++m_wi) {
-                local_iscan[m_wi] =
-                    scan_op(local_iscan[m_wi], local_iscan[m_wi - 1]);
-            }
-            // local_iscan is now result of
-            // inclusive scan of locally stored inputs
-
-            outputT wg_iscan_val;
-            if constexpr (can_use_inclusive_scan_over_group<ScanOpT,
-                                                            outputT>::value) {
-                wg_iscan_val = sycl::inclusive_scan_over_group(
-                    it.get_group(), local_iscan.back(), scan_op, identity);
-            }
-            else {
-                wg_iscan_val = su_ns::custom_inclusive_scan_over_group(
-                    it.get_group(), sg, slm_iscan_tmp, local_iscan.back(),
-                    identity, scan_op);
-                // ensure all finished reading from SLM, to avoid race condition
-                // with subsequent writes into SLM
-                it.barrier(sycl::access::fence_space::local_space);
-            }
-
-            slm_iscan_tmp[(lid + 1) % wg_size] = wg_iscan_val;
-            it.barrier(sycl::access::fence_space::local_space);
-            const outputT modifier = (lid == 0) ? identity : slm_iscan_tmp[lid];
-
-#pragma unroll
-            for (nwiT m_wi = 0; m_wi < n_wi; ++m_wi) {
-                local_iscan[m_wi] = scan_op(local_iscan[m_wi], modifier);
-            }
-
-            it.barrier(sycl::access::fence_space::local_space);
-
-            // convert back to blocked layout
-            {
-                {
-                    const std::uint32_t local_offset0 = lid * n_wi;
+                        sgroup_id * sgSize * n_wi + lane_id;
 #pragma unroll
                     for (nwiT m_wi = 0; m_wi < n_wi; ++m_wi) {
-                        slm_iscan_tmp[local_offset0 + m_wi] = local_iscan[m_wi];
-                    }
-
-                    it.barrier(sycl::access::fence_space::local_space);
-                }
-            }
-
-            {
-                const std::uint32_t block_offset =
-                    sgroup_id * sgSize * n_wi + lane_id;
-#pragma unroll
-                for (nwiT m_wi = 0; m_wi < n_wi; ++m_wi) {
-                    const std::uint32_t m_wi_scaled = m_wi * sgSize;
-                    const std::size_t out_id = inp_id0 + m_wi_scaled;
-                    if (out_id < acc_nelems) {
-                        output[out_iter_offset + out_indexer(out_id)] =
-                            slm_iscan_tmp[block_offset + m_wi_scaled];
+                        const std::uint32_t m_wi_scaled = m_wi * sgSize;
+                        const std::size_t out_id = inp_id0 + m_wi_scaled;
+                        if (out_id < acc_nelems) {
+                            output[out_iter_offset + out_indexer(out_id)] =
+                                slm_iscan_tmp[block_offset + m_wi_scaled];
+                        }
                     }
                 }
-            }
+            });
         });
-    });
 
     return inc_scan_phase1_ev;
 }
@@ -595,40 +605,44 @@ sycl::event update_local_chunks_1d(sycl::queue &exec_q,
         sycl::info::kernel_device_specific::max_sub_group_size>(dev);
 
     // output[ chunk_size * (i + 1) + j] += temp[i]
-    sycl::event update_event = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(dependent_event);
-        cgh.use_kernel_bundle(kb);
+    sycl::event update_event =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(dependent_event);
+            cgh.use_kernel_bundle(kb);
 
-        static constexpr nwiT updates_per_wi = n_wi;
-        const std::size_t n_items =
-            ceiling_quotient<std::size_t>(src_size, sg_size * n_wi) * sg_size;
+            static constexpr nwiT updates_per_wi = n_wi;
+            const std::size_t n_items =
+                ceiling_quotient<std::size_t>(src_size, sg_size * n_wi) *
+                sg_size;
 
-        sycl::range<1> gRange{n_items};
-        sycl::range<1> lRange{sg_size};
-        sycl::nd_range<1> ndRange{gRange, lRange};
+            sycl::range<1> gRange{n_items};
+            sycl::range<1> lRange{sg_size};
+            sycl::nd_range<1> ndRange{gRange, lRange};
 
-        cgh.parallel_for<UpdateKernelName>(
-            ndRange,
-            [chunk_size, src, src_size, local_scans](sycl::nd_item<1> ndit) {
-                static constexpr ScanOpT scan_op{};
-                static constexpr outputT identity =
-                    su_ns::Identity<ScanOpT, outputT>::value;
+            cgh.parallel_for<UpdateKernelName>(
+                ndRange, [chunk_size, src, src_size,
+                          local_scans](sycl::nd_item<1> ndit) {
+                    static constexpr ScanOpT scan_op{};
+                    static constexpr outputT identity =
+                        su_ns::Identity<ScanOpT, outputT>::value;
 
-                const std::uint32_t lws = ndit.get_local_range(0);
-                const std::size_t block_offset = ndit.get_group(0) * n_wi * lws;
+                    const std::uint32_t lws = ndit.get_local_range(0);
+                    const std::size_t block_offset =
+                        ndit.get_group(0) * n_wi * lws;
 #pragma unroll
-                for (std::size_t i = 0; i < updates_per_wi; ++i) {
-                    const std::size_t src_id =
-                        block_offset + ndit.get_local_id(0) + i * lws;
-                    if (src_id < src_size) {
-                        const std::size_t scan_id = (src_id / chunk_size);
-                        const outputT modifier =
-                            (scan_id > 0) ? local_scans[scan_id - 1] : identity;
-                        src[src_id] = scan_op(src[src_id], modifier);
+                    for (std::size_t i = 0; i < updates_per_wi; ++i) {
+                        const std::size_t src_id =
+                            block_offset + ndit.get_local_id(0) + i * lws;
+                        if (src_id < src_size) {
+                            const std::size_t scan_id = (src_id / chunk_size);
+                            const outputT modifier =
+                                (scan_id > 0) ? local_scans[scan_id - 1]
+                                              : identity;
+                            src[src_id] = scan_op(src[src_id], modifier);
+                        }
                     }
-                }
-            });
-    });
+                });
+        });
 
     return update_event;
 }
@@ -855,45 +869,47 @@ sycl::event final_update_local_chunks(sycl::queue &exec_q,
 
     sycl::nd_range<2> ndRange{gRange, lRange};
 
-    sycl::event update_event = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(dependent_event);
+    sycl::event update_event =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(dependent_event);
 
-        cgh.parallel_for<UpdateKernelName>(
-            ndRange, [chunk_size, src_size, local_stride, src, local_scans,
-                      out_iter_indexer, out_indexer](sycl::nd_item<2> ndit) {
-                static constexpr ScanOpT scan_op{};
-                static constexpr outputT identity =
-                    su_ns::Identity<ScanOpT, outputT>::value;
+            cgh.parallel_for<UpdateKernelName>(
+                ndRange,
+                [chunk_size, src_size, local_stride, src, local_scans,
+                 out_iter_indexer, out_indexer](sycl::nd_item<2> ndit) {
+                    static constexpr ScanOpT scan_op{};
+                    static constexpr outputT identity =
+                        su_ns::Identity<ScanOpT, outputT>::value;
 
-                const std::uint32_t lws = ndit.get_local_range(1);
+                    const std::uint32_t lws = ndit.get_local_range(1);
 
-                const std::size_t iter_gid = ndit.get_group(0);
+                    const std::size_t iter_gid = ndit.get_group(0);
 
-                const std::size_t src_axis_id0 =
-                    ndit.get_group(1) * updates_per_wi * lws +
-                    ndit.get_local_id(1);
-                const std::size_t src_iter_id = out_iter_indexer(iter_gid);
+                    const std::size_t src_axis_id0 =
+                        ndit.get_group(1) * updates_per_wi * lws +
+                        ndit.get_local_id(1);
+                    const std::size_t src_iter_id = out_iter_indexer(iter_gid);
 #pragma unroll
-                for (nwiT i = 0; i < updates_per_wi; ++i) {
-                    const std::size_t src_axis_id = src_axis_id0 + i * lws;
-                    const std::size_t src_id =
-                        out_indexer(src_axis_id) + src_iter_id;
+                    for (nwiT i = 0; i < updates_per_wi; ++i) {
+                        const std::size_t src_axis_id = src_axis_id0 + i * lws;
+                        const std::size_t src_id =
+                            out_indexer(src_axis_id) + src_iter_id;
 
-                    if (src_axis_id < src_size) {
-                        const std::size_t scan_axis_id =
-                            src_axis_id / chunk_size;
-                        const std::size_t scan_id =
-                            scan_axis_id + iter_gid * local_stride;
+                        if (src_axis_id < src_size) {
+                            const std::size_t scan_axis_id =
+                                src_axis_id / chunk_size;
+                            const std::size_t scan_id =
+                                scan_axis_id + iter_gid * local_stride;
 
-                        const outputT modifier = (scan_axis_id > 0)
-                                                     ? local_scans[scan_id - 1]
-                                                     : identity;
+                            const outputT modifier =
+                                (scan_axis_id > 0) ? local_scans[scan_id - 1]
+                                                   : identity;
 
-                        src[src_id] = scan_op(src[src_id], modifier);
+                            src[src_id] = scan_op(src[src_id], modifier);
+                        }
                     }
-                }
-            });
-    });
+                });
+        });
 
     return update_event;
 }

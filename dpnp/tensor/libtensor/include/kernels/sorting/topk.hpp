@@ -49,6 +49,7 @@
 #include "kernels/sorting/search_sorted_detail.hpp"
 #include "kernels/sorting/sort_utils.hpp"
 #include "utils/sycl_alloc_utils.hpp"
+#include "utils/sycl_utils.hpp"
 
 namespace dpnp::tensor::kernels
 {
@@ -96,42 +97,43 @@ sycl::event write_out_impl(sycl::queue &exec_q,
     sycl::range<1> gRange{n_groups * lws};
     sycl::nd_range<1> ndRange{gRange, lRange};
 
-    sycl::event write_out_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event write_out_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        cgh.parallel_for<KernelName>(ndRange, [=](sycl::nd_item<1> it) {
-            const std::size_t gid = it.get_global_linear_id();
-            const auto &sg = it.get_sub_group();
-            const std::uint32_t lane_id = sg.get_local_id()[0];
-            const std::uint32_t sg_size = sg.get_max_local_range()[0];
+            cgh.parallel_for<KernelName>(ndRange, [=](sycl::nd_item<1> it) {
+                const std::size_t gid = it.get_global_linear_id();
+                const auto &sg = it.get_sub_group();
+                const std::uint32_t lane_id = sg.get_local_id()[0];
+                const std::uint32_t sg_size = sg.get_max_local_range()[0];
 
-            const std::size_t start_id = (gid - lane_id) * n_wi + lane_id;
+                const std::size_t start_id = (gid - lane_id) * n_wi + lane_id;
 
 #pragma unroll
-            for (std::uint32_t i = 0; i < n_wi; ++i) {
-                const std::size_t data_id = start_id + i * sg_size;
+                for (std::uint32_t i = 0; i < n_wi; ++i) {
+                    const std::size_t data_id = start_id + i * sg_size;
 
-                if (data_id < nelems) {
-                    const std::size_t iter_id = data_id / k;
+                    if (data_id < nelems) {
+                        const std::size_t iter_id = data_id / k;
 
-                    /*
-                    const std::size_t axis_gid = data_id - (iter_gid * k);
-                    const std::size_t src_idx = iter_gid * iter_index_stride +
-                    axis_gid;
-                    */
-                    const std::size_t src_idx =
-                        data_id + iter_id * (iter_index_stride - k);
+                        /*
+                        const std::size_t axis_gid = data_id - (iter_gid * k);
+                        const std::size_t src_idx = iter_gid * iter_index_stride
+                        + axis_gid;
+                        */
+                        const std::size_t src_idx =
+                            data_id + iter_id * (iter_index_stride - k);
 
-                    const IndexTy res_ind = index_data[src_idx];
-                    const argTy v = arg_tp[res_ind];
+                        const IndexTy res_ind = index_data[src_idx];
+                        const argTy v = arg_tp[res_ind];
 
-                    const std::size_t dst_idx = data_id;
-                    vals_tp[dst_idx] = v;
-                    inds_tp[dst_idx] = (res_ind % axis_nelems);
+                        const std::size_t dst_idx = data_id;
+                        vals_tp[dst_idx] = v;
+                        inds_tp[dst_idx] = (res_ind % axis_nelems);
+                    }
                 }
-            }
+            });
         });
-    });
 
     return write_out_ev;
 }
@@ -314,22 +316,23 @@ sycl::event topk_merge_impl(
         // no need to populate index data: SLM will be populated with default
         // values
 
-        sycl::event base_sort_ev = exec_q.submit([&](sycl::handler &cgh) {
-            cgh.depends_on(depends);
+        sycl::event base_sort_ev =
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+                cgh.depends_on(depends);
 
-            cgh.use_kernel_bundle(kb);
+                cgh.use_kernel_bundle(kb);
 
-            sycl::range<1> global_range{iter_nelems * n_segments * lws};
-            sycl::range<1> local_range{lws};
+                sycl::range<1> global_range{iter_nelems * n_segments * lws};
+                sycl::range<1> local_range{lws};
 
-            sycl::range<1> slm_range{sorted_block_size};
-            sycl::local_accessor<IndexTy, 1> work_space(slm_range, cgh);
-            sycl::local_accessor<IndexTy, 1> scratch_space(slm_range, cgh);
+                sycl::range<1> slm_range{sorted_block_size};
+                sycl::local_accessor<IndexTy, 1> work_space(slm_range, cgh);
+                sycl::local_accessor<IndexTy, 1> scratch_space(slm_range, cgh);
 
-            sycl::nd_range<1> ndRange(global_range, local_range);
+                sycl::nd_range<1> ndRange(global_range, local_range);
 
-            cgh.parallel_for<PartialKernelName>(
-                ndRange, [=](sycl::nd_item<1> it) {
+                cgh.parallel_for<
+                    PartialKernelName>(ndRange, [=](sycl::nd_item<1> it) {
                     const std::size_t group_id = it.get_group_linear_id();
                     const std::size_t iter_id = group_id / n_segments;
                     const std::size_t segment_id =
@@ -414,7 +417,7 @@ sycl::event topk_merge_impl(
                         }
                     }
                 });
-        });
+            });
 
         // Merge segments in parallel until all elements are sorted
         sycl::event merges_ev =

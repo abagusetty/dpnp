@@ -319,7 +319,8 @@ sycl::event sequential_dot_product(sycl::queue &exec_q,
                                    const RedIndexerT &reduction_indexer,
                                    const std::vector<sycl::event> &depends)
 {
-    sycl::event dot_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event dot_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                   &cgh) {
         cgh.depends_on(depends);
 
         cgh.parallel_for<
@@ -359,7 +360,8 @@ sycl::event submit_atomic_dot_product(sycl::queue &exec_q,
                                       const RedIndexerT &reduction_indexer,
                                       const std::vector<sycl::event> &depends)
 {
-    sycl::event dot_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event dot_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                   &cgh) {
         cgh.depends_on(depends);
 
         auto globalRange = sycl::range<1>{batches * reduction_groups * wg};
@@ -478,24 +480,26 @@ sycl::event dot_product_impl(sycl::queue &exec_q,
         return dot_ev;
     }
     else {
-        sycl::event res_init_ev = exec_q.submit([&](sycl::handler &cgh) {
-            using IndexerT = dpnp::tensor::offset_utils::UnpackedStridedIndexer;
+        sycl::event res_init_ev =
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+                using IndexerT =
+                    dpnp::tensor::offset_utils::UnpackedStridedIndexer;
 
-            const ssize_t *const &res_shape = batch_shape_and_strides;
-            const ssize_t *const &res_strides =
-                batch_shape_and_strides + 3 * batch_nd;
-            const IndexerT res_indexer(batch_nd, batch_res_offset, res_shape,
-                                       res_strides);
-            using InitKernelName =
-                class dot_product_init_krn<lhsTy, rhsTy, resTy>;
-            cgh.depends_on(depends);
+                const ssize_t *const &res_shape = batch_shape_and_strides;
+                const ssize_t *const &res_strides =
+                    batch_shape_and_strides + 3 * batch_nd;
+                const IndexerT res_indexer(batch_nd, batch_res_offset,
+                                           res_shape, res_strides);
+                using InitKernelName =
+                    class dot_product_init_krn<lhsTy, rhsTy, resTy>;
+                cgh.depends_on(depends);
 
-            cgh.parallel_for<InitKernelName>(
-                sycl::range<1>(batches), [=](sycl::id<1> id) {
-                    auto res_offset = res_indexer(id[0]);
-                    res_tp[res_offset] = 0;
-                });
-        });
+                cgh.parallel_for<InitKernelName>(
+                    sycl::range<1>(batches), [=](sycl::id<1> id) {
+                        auto res_offset = res_indexer(id[0]);
+                        res_tp[res_offset] = 0;
+                    });
+            });
 
         using ReductionOpT = sycl::plus<resTy>;
 
@@ -600,11 +604,12 @@ sycl::event
         return dot_ev;
     }
     else {
-        sycl::event res_init_ev = exec_q.submit([&](sycl::handler &cgh) {
-            cgh.depends_on(depends);
+        sycl::event res_init_ev =
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+                cgh.depends_on(depends);
 
-            cgh.fill<resTy>(res_tp, resTy(0), batches);
-        });
+                cgh.fill<resTy>(res_tp, resTy(0), batches);
+            });
 
         using ReductionOpT = sycl::plus<resTy>;
 
@@ -867,7 +872,8 @@ sycl::event
                                  const RedIndexerT &reduction_indexer,
                                  const std::vector<sycl::event> &depends)
 {
-    sycl::event dot_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event dot_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                   &cgh) {
         cgh.depends_on(depends);
 
         auto globalRange = sycl::range<1>{batches * reduction_groups * wg};

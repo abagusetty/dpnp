@@ -50,6 +50,7 @@
 #include "kernels/dpnp_tensor_types.hpp"
 #include "kernels/sorting/sort_utils.hpp"
 #include "utils/sycl_alloc_utils.hpp"
+#include "utils/sycl_utils.hpp"
 
 namespace dpnp::tensor::kernels
 {
@@ -310,118 +311,119 @@ sycl::event
 
     assert(n_counts == (n_segments + 1) * radix_states + 1);
 
-    sycl::event local_count_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(dependency_events);
+    sycl::event local_count_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(dependency_events);
 
-        sycl::local_accessor<CountT, 1> counts_lacc(wg_size * radix_states,
-                                                    cgh);
+            sycl::local_accessor<CountT, 1> counts_lacc(wg_size * radix_states,
+                                                        cgh);
 
-        sycl::nd_range<1> ndRange(n_iters * n_segments * wg_size, wg_size);
+            sycl::nd_range<1> ndRange(n_iters * n_segments * wg_size, wg_size);
 
-        cgh.parallel_for<KernelName>(ndRange, [=](sycl::nd_item<1> ndit) {
-            // 0 <= lid < wg_size
-            const std::size_t lid = ndit.get_local_id(0);
-            // 0 <= group_id < n_segments * n_iters
-            const std::size_t group_id = ndit.get_group(0);
-            const std::size_t iter_id = group_id / n_segments;
-            const std::size_t val_iter_offset = iter_id * n;
-            // 0 <= wgr_id < n_segments
-            const std::size_t wgr_id = group_id - iter_id * n_segments;
+            cgh.parallel_for<KernelName>(ndRange, [=](sycl::nd_item<1> ndit) {
+                // 0 <= lid < wg_size
+                const std::size_t lid = ndit.get_local_id(0);
+                // 0 <= group_id < n_segments * n_iters
+                const std::size_t group_id = ndit.get_group(0);
+                const std::size_t iter_id = group_id / n_segments;
+                const std::size_t val_iter_offset = iter_id * n;
+                // 0 <= wgr_id < n_segments
+                const std::size_t wgr_id = group_id - iter_id * n_segments;
 
-            const std::size_t seg_start = elems_per_segment * wgr_id;
+                const std::size_t seg_start = elems_per_segment * wgr_id;
 
-            // count per work-item: create a private array for storing count
-            // values here bin_count = radix_states
-            std::array<CountT, radix_states> counts_arr = {CountT{0}};
+                // count per work-item: create a private array for storing count
+                // values here bin_count = radix_states
+                std::array<CountT, radix_states> counts_arr = {CountT{0}};
 
-            // count per work-item: count values and write result to private
-            // count array
-            const std::size_t seg_end =
-                sycl::min(seg_start + elems_per_segment, n);
-            if (is_ascending) {
-                for (std::size_t val_id = seg_start + lid; val_id < seg_end;
-                     val_id += wg_size) {
-                    // get the bucket for the bit-ordered input value,
-                    // applying the offset and mask for radix bits
-                    const auto val =
-                        order_preserving_cast</*is_ascending*/ true>(
-                            proj_op(vals_ptr[val_iter_offset + val_id]));
-                    const std::uint32_t bucket_id =
-                        get_bucket_id<radix_mask>(val, radix_offset);
+                // count per work-item: count values and write result to private
+                // count array
+                const std::size_t seg_end =
+                    sycl::min(seg_start + elems_per_segment, n);
+                if (is_ascending) {
+                    for (std::size_t val_id = seg_start + lid; val_id < seg_end;
+                         val_id += wg_size) {
+                        // get the bucket for the bit-ordered input value,
+                        // applying the offset and mask for radix bits
+                        const auto val =
+                            order_preserving_cast</*is_ascending*/ true>(
+                                proj_op(vals_ptr[val_iter_offset + val_id]));
+                        const std::uint32_t bucket_id =
+                            get_bucket_id<radix_mask>(val, radix_offset);
 
-                    // increment counter for this bit bucket
-                    ++counts_arr[bucket_id];
+                        // increment counter for this bit bucket
+                        ++counts_arr[bucket_id];
+                    }
                 }
-            }
-            else {
-                for (std::size_t val_id = seg_start + lid; val_id < seg_end;
-                     val_id += wg_size) {
-                    // get the bucket for the bit-ordered input value,
-                    // applying the offset and mask for radix bits
-                    const auto val =
-                        order_preserving_cast</*is_ascending*/ false>(
-                            proj_op(vals_ptr[val_iter_offset + val_id]));
-                    const std::uint32_t bucket_id =
-                        get_bucket_id<radix_mask>(val, radix_offset);
+                else {
+                    for (std::size_t val_id = seg_start + lid; val_id < seg_end;
+                         val_id += wg_size) {
+                        // get the bucket for the bit-ordered input value,
+                        // applying the offset and mask for radix bits
+                        const auto val =
+                            order_preserving_cast</*is_ascending*/ false>(
+                                proj_op(vals_ptr[val_iter_offset + val_id]));
+                        const std::uint32_t bucket_id =
+                            get_bucket_id<radix_mask>(val, radix_offset);
 
-                    // increment counter for this bit bucket
-                    ++counts_arr[bucket_id];
+                        // increment counter for this bit bucket
+                        ++counts_arr[bucket_id];
+                    }
                 }
-            }
 
-            // count per work-item: write private count array to local count
-            // array counts_lacc is concatenation of private count arrays from
-            // each work-item in the order of their local ids
-            const std::uint32_t count_start_id = radix_states * lid;
-            for (std::uint32_t radix_state_id = 0;
-                 radix_state_id < radix_states; ++radix_state_id) {
-                counts_lacc[count_start_id + radix_state_id] =
-                    counts_arr[radix_state_id];
-            }
-
-            sycl::group_barrier(ndit.get_group());
-
-            // count per work-group: reduce till count_lacc[] size > wg_size
-            // all work-items in the work-group do the work.
-            for (std::uint32_t i = 1; i < radix_states; ++i) {
-                // Since we interested in computing total count over work-group
-                // for each radix state, the correct result is only assured if
-                // wg_size >= radix_states
-                counts_lacc[lid] += counts_lacc[wg_size * i + lid];
-            }
-
-            sycl::group_barrier(ndit.get_group());
-
-            // count per work-group: reduce until count_lacc[] size >
-            // radix_states (n_witems /= 2 per iteration)
-            for (std::uint32_t n_witems = (wg_size >> 1);
-                 n_witems >= radix_states; n_witems >>= 1) {
-                if (lid < n_witems)
-                    counts_lacc[lid] += counts_lacc[n_witems + lid];
+                // count per work-item: write private count array to local count
+                // array counts_lacc is concatenation of private count arrays
+                // from each work-item in the order of their local ids
+                const std::uint32_t count_start_id = radix_states * lid;
+                for (std::uint32_t radix_state_id = 0;
+                     radix_state_id < radix_states; ++radix_state_id) {
+                    counts_lacc[count_start_id + radix_state_id] =
+                        counts_arr[radix_state_id];
+                }
 
                 sycl::group_barrier(ndit.get_group());
-            }
 
-            const std::size_t iter_counter_offset = iter_id * n_counts;
+                // count per work-group: reduce till count_lacc[] size > wg_size
+                // all work-items in the work-group do the work.
+                for (std::uint32_t i = 1; i < radix_states; ++i) {
+                    // Since we interested in computing total count over
+                    // work-group for each radix state, the correct result is
+                    // only assured if wg_size >= radix_states
+                    counts_lacc[lid] += counts_lacc[wg_size * i + lid];
+                }
 
-            // count per work-group: write local count array to global count
-            // array
-            if (lid < radix_states) {
-                // move buckets with the same id to adjacent positions,
-                // thus splitting count array into radix_states regions
-                counts_ptr[iter_counter_offset + (n_segments + 1) * lid +
-                           wgr_id] = counts_lacc[lid];
-            }
+                sycl::group_barrier(ndit.get_group());
 
-            // side work: reset 'no-operation-flag', signaling to skip re-order
-            // phase
-            if (wgr_id == 0 && lid == 0) {
-                CountT &no_op_flag =
-                    counts_ptr[iter_counter_offset + no_op_flag_id];
-                no_op_flag = 0;
-            }
+                // count per work-group: reduce until count_lacc[] size >
+                // radix_states (n_witems /= 2 per iteration)
+                for (std::uint32_t n_witems = (wg_size >> 1);
+                     n_witems >= radix_states; n_witems >>= 1) {
+                    if (lid < n_witems)
+                        counts_lacc[lid] += counts_lacc[n_witems + lid];
+
+                    sycl::group_barrier(ndit.get_group());
+                }
+
+                const std::size_t iter_counter_offset = iter_id * n_counts;
+
+                // count per work-group: write local count array to global count
+                // array
+                if (lid < radix_states) {
+                    // move buckets with the same id to adjacent positions,
+                    // thus splitting count array into radix_states regions
+                    counts_ptr[iter_counter_offset + (n_segments + 1) * lid +
+                               wgr_id] = counts_lacc[lid];
+                }
+
+                // side work: reset 'no-operation-flag', signaling to skip
+                // re-order phase
+                if (wgr_id == 0 && lid == 0) {
+                    CountT &no_op_flag =
+                        counts_ptr[iter_counter_offset + no_op_flag_id];
+                    no_op_flag = 0;
+                }
+            });
         });
-    });
 
     return local_count_ev;
 }
@@ -455,7 +457,8 @@ sycl::event radix_sort_scan_submit(sycl::queue &exec_q,
     // compilation of the kernel prevents out of resources issue, which may
     // occur due to usage of collective algorithms such as joint_exclusive_scan
     // even if local memory is not explicitly requested
-    sycl::event scan_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event scan_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         sycl::nd_range<1> ndRange(n_iters * radix_states * wg_size, wg_size);
@@ -746,7 +749,8 @@ sycl::event
     const std::uint32_t sg_size = krn.template get_info<
         sycl::info::kernel_device_specific::max_sub_group_size>(dev);
 
-    sycl::event reorder_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event reorder_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                       &cgh) {
         cgh.depends_on(dependency_events);
         cgh.use_kernel_bundle(kb);
 
@@ -1300,7 +1304,8 @@ private:
                 sycl::range<1> gRange{(block_end - block_start) * wg_size};
                 sycl::nd_range ndRange{gRange, lRange};
 
-                sort_ev = exec_q.submit([&](sycl::handler &cgh) {
+                sort_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
                     cgh.depends_on(deps);
                     cgh.use_kernel_bundle(kb);
 

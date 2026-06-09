@@ -42,6 +42,7 @@
 #include "kernels/dpnp_tensor_types.hpp"
 #include "kernels/sorting/search_sorted_detail.hpp"
 #include "utils/offset_utils.hpp"
+#include "utils/sycl_utils.hpp"
 
 namespace dpnp::tensor::kernels
 {
@@ -149,7 +150,8 @@ sycl::event searchsorted_contig_impl(sycl::queue &exec_q,
     indTy *positions_tp =
         reinterpret_cast<indTy *>(positions_cp) + positions_offset;
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event comp_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         using KernelName =
@@ -217,7 +219,8 @@ sycl::event searchsorted_strided_impl(
 
     indTy *positions_tp = reinterpret_cast<indTy *>(positions_cp);
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event comp_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         sycl::range<1> gRange(needles_nelems);

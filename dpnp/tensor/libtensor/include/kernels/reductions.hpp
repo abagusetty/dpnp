@@ -640,7 +640,8 @@ sycl::event
                          const ReductionIndexerT &reduction_indexer,
                          const std::vector<sycl::event> &depends)
 {
-    sycl::event red_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event red_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                   &cgh) {
         cgh.depends_on(depends);
 
         using KernelName =
@@ -685,7 +686,8 @@ sycl::event
                             const ReductionIndexerT &reduction_indexer,
                             const std::vector<sycl::event> &depends)
 {
-    sycl::event red_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event red_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                   &cgh) {
         cgh.depends_on(depends);
 
         auto globalRange = sycl::range<1>{iter_nelems * reduction_groups * wg};
@@ -803,25 +805,27 @@ sycl::event reduction_over_group_with_atomics_strided_impl(
         return comp_ev;
     }
     else {
-        sycl::event res_init_ev = exec_q.submit([&](sycl::handler &cgh) {
-            using IndexerT = dpnp::tensor::offset_utils::UnpackedStridedIndexer;
+        sycl::event res_init_ev =
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+                using IndexerT =
+                    dpnp::tensor::offset_utils::UnpackedStridedIndexer;
 
-            const ssize_t *const &res_shape = iter_shape_and_strides;
-            const ssize_t *const &res_strides =
-                iter_shape_and_strides + 2 * iter_nd;
-            const IndexerT res_indexer(iter_nd, iter_res_offset, res_shape,
-                                       res_strides);
-            using InitKernelName =
-                class reduction_over_group_with_atomics_init_krn<resTy, argTy,
-                                                                 ReductionOpT>;
-            cgh.depends_on(depends);
+                const ssize_t *const &res_shape = iter_shape_and_strides;
+                const ssize_t *const &res_strides =
+                    iter_shape_and_strides + 2 * iter_nd;
+                const IndexerT res_indexer(iter_nd, iter_res_offset, res_shape,
+                                           res_strides);
+                using InitKernelName =
+                    class reduction_over_group_with_atomics_init_krn<
+                        resTy, argTy, ReductionOpT>;
+                cgh.depends_on(depends);
 
-            cgh.parallel_for<InitKernelName>(
-                sycl::range<1>(iter_nelems), [=](sycl::id<1> id) {
-                    auto res_offset = res_indexer(id[0]);
-                    res_tp[res_offset] = identity_val;
-                });
-        });
+                cgh.parallel_for<InitKernelName>(
+                    sycl::range<1>(iter_nelems), [=](sycl::id<1> id) {
+                        auto res_offset = res_indexer(id[0]);
+                        res_tp[res_offset] = identity_val;
+                    });
+            });
 
         using InputOutputIterIndexerT =
             dpnp::tensor::offset_utils::TwoOffsets_StridedIndexer;
@@ -1071,7 +1075,8 @@ sycl::event submit_no_atomic_reduction(
     const ReductionIndexerT &reduction_indexer,
     const std::vector<sycl::event> &depends)
 {
-    sycl::event red_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event red_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                   &cgh) {
         cgh.depends_on(depends);
 
         auto globalRange = sycl::range<1>{iter_nelems * reduction_groups * wg};
@@ -1159,25 +1164,27 @@ sycl::event reduction_over_group_temps_strided_impl(
         su_ns::Identity<ReductionOpT, resTy>::value;
 
     if (reduction_nelems == 0) {
-        sycl::event res_init_ev = exec_q.submit([&](sycl::handler &cgh) {
-            using IndexerT = dpnp::tensor::offset_utils::UnpackedStridedIndexer;
+        sycl::event res_init_ev =
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+                using IndexerT =
+                    dpnp::tensor::offset_utils::UnpackedStridedIndexer;
 
-            const ssize_t *const &res_shape = iter_shape_and_strides;
-            const ssize_t *const &res_strides =
-                iter_shape_and_strides + 2 * iter_nd;
-            const IndexerT res_indexer(iter_nd, iter_res_offset, res_shape,
-                                       res_strides);
-            using InitKernelName =
-                class reduction_over_group_temps_empty_krn<resTy, argTy,
-                                                           ReductionOpT>;
-            cgh.depends_on(depends);
+                const ssize_t *const &res_shape = iter_shape_and_strides;
+                const ssize_t *const &res_strides =
+                    iter_shape_and_strides + 2 * iter_nd;
+                const IndexerT res_indexer(iter_nd, iter_res_offset, res_shape,
+                                           res_strides);
+                using InitKernelName =
+                    class reduction_over_group_temps_empty_krn<resTy, argTy,
+                                                               ReductionOpT>;
+                cgh.depends_on(depends);
 
-            cgh.parallel_for<InitKernelName>(
-                sycl::range<1>(iter_nelems), [=](sycl::id<1> id) {
-                    auto res_offset = res_indexer(id[0]);
-                    res_tp[res_offset] = identity_val;
-                });
-        });
+                cgh.parallel_for<InitKernelName>(
+                    sycl::range<1>(iter_nelems), [=](sycl::id<1> id) {
+                        auto res_offset = res_indexer(id[0]);
+                        res_tp[res_offset] = identity_val;
+                    });
+            });
 
         return res_init_ev;
     }
@@ -2443,7 +2450,8 @@ sycl::event
                             const ReductionIndexerT &reduction_indexer,
                             const std::vector<sycl::event> &depends)
 {
-    sycl::event red_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event red_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                   &cgh) {
         cgh.depends_on(depends);
 
         auto globalRange = sycl::range<1>{iter_nelems * reduction_groups * wg};
@@ -2514,24 +2522,26 @@ sycl::event search_over_group_temps_strided_impl(
         su_ns::Identity<IndexOpT, resTy>::value;
 
     if (reduction_nelems == 0) {
-        sycl::event res_init_ev = exec_q.submit([&](sycl::handler &cgh) {
-            using IndexerT = dpnp::tensor::offset_utils::UnpackedStridedIndexer;
+        sycl::event res_init_ev =
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+                using IndexerT =
+                    dpnp::tensor::offset_utils::UnpackedStridedIndexer;
 
-            const ssize_t *const &res_shape = iter_shape_and_strides;
-            const ssize_t *const &res_strides =
-                iter_shape_and_strides + 2 * iter_nd;
-            const IndexerT res_indexer(iter_nd, iter_res_offset, res_shape,
-                                       res_strides);
-            using InitKernelName =
-                class search_empty_krn<resTy, argTy, ReductionOpT>;
-            cgh.depends_on(depends);
+                const ssize_t *const &res_shape = iter_shape_and_strides;
+                const ssize_t *const &res_strides =
+                    iter_shape_and_strides + 2 * iter_nd;
+                const IndexerT res_indexer(iter_nd, iter_res_offset, res_shape,
+                                           res_strides);
+                using InitKernelName =
+                    class search_empty_krn<resTy, argTy, ReductionOpT>;
+                cgh.depends_on(depends);
 
-            cgh.parallel_for<InitKernelName>(
-                sycl::range<1>(iter_nelems), [=](sycl::id<1> id) {
-                    auto res_offset = res_indexer(id[0]);
-                    res_tp[res_offset] = idx_identity_val;
-                });
-        });
+                cgh.parallel_for<InitKernelName>(
+                    sycl::range<1>(iter_nelems), [=](sycl::id<1> id) {
+                        auto res_offset = res_indexer(id[0]);
+                        res_tp[res_offset] = idx_identity_val;
+                    });
+            });
 
         return res_init_ev;
     }
@@ -2550,20 +2560,21 @@ sycl::event search_over_group_temps_strided_impl(
         const ReductionIndexerT reduction_indexer{red_nd, reduction_arg_offset,
                                                   reduction_shape_stride};
 
-        sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-            cgh.depends_on(depends);
+        sycl::event comp_ev =
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+                cgh.depends_on(depends);
 
-            cgh.parallel_for<class search_seq_strided_krn<
-                argTy, resTy, ReductionOpT, IndexOpT, InputOutputIterIndexerT,
-                ReductionIndexerT>>(
-                sycl::range<1>(iter_nelems),
-                SequentialSearchReduction<argTy, resTy, ReductionOpT, IndexOpT,
-                                          InputOutputIterIndexerT,
-                                          ReductionIndexerT>(
-                    arg_tp, res_tp, ReductionOpT(), identity_val, IndexOpT(),
-                    idx_identity_val, in_out_iter_indexer, reduction_indexer,
-                    reduction_nelems));
-        });
+                cgh.parallel_for<class search_seq_strided_krn<
+                    argTy, resTy, ReductionOpT, IndexOpT,
+                    InputOutputIterIndexerT, ReductionIndexerT>>(
+                    sycl::range<1>(iter_nelems),
+                    SequentialSearchReduction<argTy, resTy, ReductionOpT,
+                                              IndexOpT, InputOutputIterIndexerT,
+                                              ReductionIndexerT>(
+                        arg_tp, res_tp, ReductionOpT(), identity_val,
+                        IndexOpT(), idx_identity_val, in_out_iter_indexer,
+                        reduction_indexer, reduction_nelems));
+            });
 
         return comp_ev;
     }
@@ -2830,20 +2841,21 @@ sycl::event search_axis1_over_group_temps_contig_impl(
             NoOpIndexerT{}};
         static constexpr ReductionIndexerT reduction_indexer{};
 
-        sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-            cgh.depends_on(depends);
+        sycl::event comp_ev =
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+                cgh.depends_on(depends);
 
-            cgh.parallel_for<class search_seq_contig_krn<
-                argTy, resTy, ReductionOpT, IndexOpT, InputOutputIterIndexerT,
-                ReductionIndexerT>>(
-                sycl::range<1>(iter_nelems),
-                SequentialSearchReduction<argTy, resTy, ReductionOpT, IndexOpT,
-                                          InputOutputIterIndexerT,
-                                          ReductionIndexerT>(
-                    arg_tp, res_tp, ReductionOpT(), identity_val, IndexOpT(),
-                    idx_identity_val, in_out_iter_indexer, reduction_indexer,
-                    reduction_nelems));
-        });
+                cgh.parallel_for<class search_seq_contig_krn<
+                    argTy, resTy, ReductionOpT, IndexOpT,
+                    InputOutputIterIndexerT, ReductionIndexerT>>(
+                    sycl::range<1>(iter_nelems),
+                    SequentialSearchReduction<argTy, resTy, ReductionOpT,
+                                              IndexOpT, InputOutputIterIndexerT,
+                                              ReductionIndexerT>(
+                        arg_tp, res_tp, ReductionOpT(), identity_val,
+                        IndexOpT(), idx_identity_val, in_out_iter_indexer,
+                        reduction_indexer, reduction_nelems));
+            });
 
         return comp_ev;
     }
@@ -3089,25 +3101,25 @@ sycl::event search_axis0_over_group_temps_contig_impl(
         const ReductionIndexerT reduction_indexer{/* size */ reduction_nelems,
                                                   /* step */ iter_nelems};
 
-        sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-            cgh.depends_on(depends);
+        sycl::event comp_ev =
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+                cgh.depends_on(depends);
 
-            using KernelName =
-                class search_seq_contig_krn<argTy, resTy, ReductionOpT,
-                                            IndexOpT, InputOutputIterIndexerT,
-                                            ReductionIndexerT>;
+                using KernelName = class search_seq_contig_krn<
+                    argTy, resTy, ReductionOpT, IndexOpT,
+                    InputOutputIterIndexerT, ReductionIndexerT>;
 
-            sycl::range<1> iter_range{iter_nelems};
+                sycl::range<1> iter_range{iter_nelems};
 
-            cgh.parallel_for<KernelName>(
-                iter_range,
-                SequentialSearchReduction<argTy, resTy, ReductionOpT, IndexOpT,
-                                          InputOutputIterIndexerT,
-                                          ReductionIndexerT>(
-                    arg_tp, res_tp, ReductionOpT(), identity_val, IndexOpT(),
-                    idx_identity_val, in_out_iter_indexer, reduction_indexer,
-                    reduction_nelems));
-        });
+                cgh.parallel_for<KernelName>(
+                    iter_range,
+                    SequentialSearchReduction<argTy, resTy, ReductionOpT,
+                                              IndexOpT, InputOutputIterIndexerT,
+                                              ReductionIndexerT>(
+                        arg_tp, res_tp, ReductionOpT(), identity_val,
+                        IndexOpT(), idx_identity_val, in_out_iter_indexer,
+                        reduction_indexer, reduction_nelems));
+            });
 
         return comp_ev;
     }

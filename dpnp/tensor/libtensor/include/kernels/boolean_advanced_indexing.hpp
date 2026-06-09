@@ -43,6 +43,7 @@
 
 #include "dpnp_tensor_types.hpp"
 #include "utils/offset_utils.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_dispatch_building.hpp"
 
 namespace dpnp::tensor::kernels::indexing
@@ -296,17 +297,18 @@ sycl::event masked_extract_all_slices_contig_impl(
     const indT *cumsum_tp = reinterpret_cast<const indT *>(cumsum_p);
     dataT *dst_tp = reinterpret_cast<dataT *>(dst_p);
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        const std::size_t lacc_size = std::min(lws, masked_extent) + 1;
-        LocalAccessorT lacc(lacc_size, cgh);
+            const std::size_t lacc_size = std::min(lws, masked_extent) + 1;
+            LocalAccessorT lacc(lacc_size, cgh);
 
-        cgh.parallel_for<KernelName>(
-            ndRange, Impl(src_tp, cumsum_tp, dst_tp, masked_extent,
-                          orthog_src_dst_indexer, masked_src_indexer,
-                          masked_dst_indexer, lacc));
-    });
+            cgh.parallel_for<KernelName>(
+                ndRange, Impl(src_tp, cumsum_tp, dst_tp, masked_extent,
+                              orthog_src_dst_indexer, masked_src_indexer,
+                              masked_dst_indexer, lacc));
+        });
 
     return comp_ev;
 }
@@ -375,17 +377,18 @@ sycl::event masked_extract_all_slices_strided_impl(
     const indT *cumsum_tp = reinterpret_cast<const indT *>(cumsum_p);
     dataT *dst_tp = reinterpret_cast<dataT *>(dst_p);
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        const std::size_t lacc_size = std::min(lws, masked_nelems) + 1;
-        LocalAccessorT lacc(lacc_size, cgh);
+            const std::size_t lacc_size = std::min(lws, masked_nelems) + 1;
+            LocalAccessorT lacc(lacc_size, cgh);
 
-        cgh.parallel_for<KernelName>(
-            ndRange, Impl(src_tp, cumsum_tp, dst_tp, iteration_size,
-                          orthog_src_dst_indexer, masked_src_indexer,
-                          masked_dst_indexer, lacc));
-    });
+            cgh.parallel_for<KernelName>(
+                ndRange, Impl(src_tp, cumsum_tp, dst_tp, iteration_size,
+                              orthog_src_dst_indexer, masked_src_indexer,
+                              masked_dst_indexer, lacc));
+        });
 
     return comp_ev;
 }
@@ -471,7 +474,8 @@ sycl::event masked_extract_some_slices_strided_impl(
     const indT *cumsum_tp = reinterpret_cast<const indT *>(cumsum_p);
     dataT *dst_tp = reinterpret_cast<dataT *>(dst_p);
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event comp_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         const std::size_t lacc_size =
@@ -613,17 +617,18 @@ sycl::event masked_place_all_slices_strided_impl(
     const dataT *rhs_tp = reinterpret_cast<const dataT *>(rhs_p);
     const indT *cumsum_tp = reinterpret_cast<const indT *>(cumsum_p);
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        const std::size_t lacc_size = std::min(masked_extent, lws) + 1;
-        LocalAccessorT lacc(lacc_size, cgh);
+            const std::size_t lacc_size = std::min(masked_extent, lws) + 1;
+            LocalAccessorT lacc(lacc_size, cgh);
 
-        cgh.parallel_for<KernelName>(
-            ndRange, Impl(dst_tp, cumsum_tp, rhs_tp, iteration_size,
-                          orthog_dst_rhs_indexer, masked_dst_indexer,
-                          masked_rhs_indexer, lacc));
-    });
+            cgh.parallel_for<KernelName>(
+                ndRange, Impl(dst_tp, cumsum_tp, rhs_tp, iteration_size,
+                              orthog_dst_rhs_indexer, masked_dst_indexer,
+                              masked_rhs_indexer, lacc));
+        });
 
     return comp_ev;
 }
@@ -710,17 +715,18 @@ sycl::event masked_place_some_slices_strided_impl(
     const dataT *rhs_tp = reinterpret_cast<const dataT *>(rhs_p);
     const indT *cumsum_tp = reinterpret_cast<const indT *>(cumsum_p);
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        const std::size_t lacc_size = std::min(masked_extent, lws) + 1;
-        LocalAccessorT lacc(lacc_size, cgh);
+            const std::size_t lacc_size = std::min(masked_extent, lws) + 1;
+            LocalAccessorT lacc(lacc_size, cgh);
 
-        cgh.parallel_for<KernelName>(
-            ndRange, Impl(dst_tp, cumsum_tp, rhs_tp, masked_nelems,
-                          orthog_dst_rhs_indexer, masked_dst_indexer,
-                          masked_rhs_indexer, lacc));
-    });
+            cgh.parallel_for<KernelName>(
+                ndRange, Impl(dst_tp, cumsum_tp, rhs_tp, masked_nelems,
+                              orthog_dst_rhs_indexer, masked_dst_indexer,
+                              masked_rhs_indexer, lacc));
+        });
 
     return comp_ev;
 }
@@ -803,49 +809,50 @@ sycl::event non_zero_indexes_impl(sycl::queue &exec_q,
 
     sycl::nd_range<1> ndRange{gRange, lRange};
 
-    sycl::event comp_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event comp_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        const std::size_t lacc_size = std::min(lws, masked_extent) + 1;
-        sycl::local_accessor<indT1, 1> lacc(lacc_size, cgh);
+            const std::size_t lacc_size = std::min(lws, masked_extent) + 1;
+            sycl::local_accessor<indT1, 1> lacc(lacc_size, cgh);
 
-        using KernelName = class non_zero_indexes_krn<indT1, indT2>;
+            using KernelName = class non_zero_indexes_krn<indT1, indT2>;
 
-        cgh.parallel_for<KernelName>(ndRange, [=](sycl::nd_item<1> ndit) {
-            const std::size_t group_i = ndit.get_group(0);
-            const std::uint32_t l_i = ndit.get_local_id(0);
-            const std::uint32_t lws = ndit.get_local_range(0);
+            cgh.parallel_for<KernelName>(ndRange, [=](sycl::nd_item<1> ndit) {
+                const std::size_t group_i = ndit.get_group(0);
+                const std::uint32_t l_i = ndit.get_local_id(0);
+                const std::uint32_t lws = ndit.get_local_range(0);
 
-            const std::size_t masked_block_start = group_i * lws;
+                const std::size_t masked_block_start = group_i * lws;
 
-            for (std::uint32_t i = l_i; i < lacc.size(); i += lws) {
-                const std::size_t offset = masked_block_start + i;
-                lacc[i] = (offset == 0) ? indT1(0)
-                          : (offset - 1 < masked_extent)
-                              ? cumsum_data[offset - 1]
-                              : cumsum_data[masked_extent - 1] + 1;
-            }
-
-            sycl::group_barrier(ndit.get_group());
-
-            const std::size_t i = masked_block_start + l_i;
-            const auto cs_val = lacc[l_i];
-            const bool cond = (lacc[l_i + 1] == cs_val + 1);
-
-            if (cond && (i < masked_extent)) {
-                ssize_t i_ = static_cast<ssize_t>(i);
-                for (int dim = nd; --dim > 0;) {
-                    const auto sd = mask_shape[dim];
-                    const ssize_t q = i_ / sd;
-                    const ssize_t r = (i_ - q * sd);
-                    indexes_data[cs_val + dim * nz_elems] =
-                        static_cast<indT2>(r);
-                    i_ = q;
+                for (std::uint32_t i = l_i; i < lacc.size(); i += lws) {
+                    const std::size_t offset = masked_block_start + i;
+                    lacc[i] = (offset == 0) ? indT1(0)
+                              : (offset - 1 < masked_extent)
+                                  ? cumsum_data[offset - 1]
+                                  : cumsum_data[masked_extent - 1] + 1;
                 }
-                indexes_data[cs_val] = static_cast<indT2>(i_);
-            }
+
+                sycl::group_barrier(ndit.get_group());
+
+                const std::size_t i = masked_block_start + l_i;
+                const auto cs_val = lacc[l_i];
+                const bool cond = (lacc[l_i + 1] == cs_val + 1);
+
+                if (cond && (i < masked_extent)) {
+                    ssize_t i_ = static_cast<ssize_t>(i);
+                    for (int dim = nd; --dim > 0;) {
+                        const auto sd = mask_shape[dim];
+                        const ssize_t q = i_ / sd;
+                        const ssize_t r = (i_ - q * sd);
+                        indexes_data[cs_val + dim * nz_elems] =
+                            static_cast<indT2>(r);
+                        i_ = q;
+                    }
+                    indexes_data[cs_val] = static_cast<indT2>(i_);
+                }
+            });
         });
-    });
 
     return comp_ev;
 }

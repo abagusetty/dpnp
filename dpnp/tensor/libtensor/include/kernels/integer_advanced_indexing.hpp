@@ -43,6 +43,7 @@
 #include "dpnp_tensor_types.hpp"
 #include "utils/indexing_utils.hpp"
 #include "utils/offset_utils.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_utils.hpp"
 
 namespace dpnp::tensor::kernels::indexing
@@ -163,7 +164,7 @@ sycl::event take_impl(sycl::queue &q,
 {
     dpnp::tensor::type_utils::validate_type_for_device<Ty>(q);
 
-    sycl::event take_ev = q.submit([&](sycl::handler &cgh) {
+    sycl::event take_ev = sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
         cgh.depends_on(depends);
 
         using OrthogIndexerT =
@@ -310,7 +311,7 @@ sycl::event put_impl(sycl::queue &q,
 {
     dpnp::tensor::type_utils::validate_type_for_device<Ty>(q);
 
-    sycl::event put_ev = q.submit([&](sycl::handler &cgh) {
+    sycl::event put_ev = sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
         cgh.depends_on(depends);
 
         using OrthogIndexerT =

@@ -144,7 +144,7 @@ sycl::event single_reduction_for_gemm(sycl::queue &exec_q,
         const ReductionIndexerT reduction_indexer{/* size   */ reduction_nelems,
                                                   /* step   */ iter_nelems};
 
-        red_ev = exec_q.submit([&](sycl::handler &cgh) {
+        red_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
             cgh.depends_on(depends);
 
             sycl::range<1> iter_range{iter_nelems};
@@ -225,7 +225,7 @@ sycl::event
         const ReductionIndexerT reduction_indexer{/* size */ reduction_nelems,
                                                   /* step */ iter_nelems};
 
-        red_ev = exec_q.submit([&](sycl::handler &cgh) {
+        red_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
             cgh.depends_on(depends);
 
             sycl::range<1> iter_range{iter_nelems};
@@ -789,7 +789,8 @@ sycl::event _gemm_k_impl(sycl::queue &exec_q,
 
     auto ndRange = sycl::nd_range<1>(gRange, lRange);
 
-    sycl::event gemm_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event gemm_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         using LocAccT = sycl::local_accessor<sycl::vec<resTy, m_groups>, 1>;
@@ -863,7 +864,8 @@ sycl::event _gemm_small_m_impl(sycl::queue &exec_q,
 
     auto ndRange = sycl::nd_range<1>(gRange, lRange);
 
-    sycl::event gemm_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event gemm_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         using LocAccT = sycl::local_accessor<resTy, 1>;
@@ -1357,7 +1359,8 @@ sycl::event _gemm_batch_nm_impl(sycl::queue &exec_q,
         typename std::conditional<m_vec_size == 1, resTy,
                                   sycl::vec<resTy, m_vec_size>>::type;
 
-    sycl::event gemm_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event gemm_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         cgh.use_kernel_bundle(kb);
@@ -1445,18 +1448,19 @@ sycl::event gemm_impl(sycl::queue &exec_q,
             batch_indexer, lhs_indexer, rhs_indexer, res_indexer, depends);
     }
 
-    sycl::event res_init_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event res_init_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using IndexerT = dpnp::tensor::offset_utils::StridedIndexer;
-        const IndexerT res_indexer(res_outer_nd, 0, res_shape_strides);
-        using InitKernelName = class gemm_init_krn<lhsTy, rhsTy, resTy>;
-        cgh.parallel_for<InitKernelName>(
-            sycl::range<1>(n * m), [=](sycl::id<1> id) {
-                auto res_offset = res_indexer(id[0]);
-                res_tp[res_offset] = resTy(0);
-            });
-    });
+            using IndexerT = dpnp::tensor::offset_utils::StridedIndexer;
+            const IndexerT res_indexer(res_outer_nd, 0, res_shape_strides);
+            using InitKernelName = class gemm_init_krn<lhsTy, rhsTy, resTy>;
+            cgh.parallel_for<InitKernelName>(
+                sycl::range<1>(n * m), [=](sycl::id<1> id) {
+                    auto res_offset = res_indexer(id[0]);
+                    res_tp[res_offset] = resTy(0);
+                });
+        });
 
     if (k == 0) {
         return res_init_ev;
@@ -1530,10 +1534,11 @@ sycl::event gemm_contig_impl(sycl::queue &exec_q,
             batch_indexer, lhs_indexer, rhs_indexer, res_indexer, depends);
     }
 
-    sycl::event res_init_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
-        cgh.fill<resTy>(res_tp, resTy(0), n * m);
-    });
+    sycl::event res_init_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
+            cgh.fill<resTy>(res_tp, resTy(0), n * m);
+        });
 
     if (k == 0) {
         return res_init_ev;
@@ -1642,19 +1647,21 @@ sycl::event gemm_batch_impl(sycl::queue &exec_q,
             batch_indexer, lhs_indexer, rhs_indexer, res_indexer, depends);
     }
 
-    sycl::event res_init_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
+    sycl::event res_init_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
 
-        using IndexerT = dpnp::tensor::offset_utils::StridedIndexer;
-        const IndexerT res_indexer(batch_nd + res_outer_nd, res_batch_offset,
-                                   res_shape_strides);
-        using InitKernelName = class gemm_batch_init_krn<lhsTy, rhsTy, resTy>;
-        cgh.parallel_for<InitKernelName>(
-            sycl::range<1>(n * m * batch_nelems), [=](sycl::id<1> id) {
-                auto res_offset = res_indexer(id[0]);
-                res_tp[res_offset] = resTy(0);
-            });
-    });
+            using IndexerT = dpnp::tensor::offset_utils::StridedIndexer;
+            const IndexerT res_indexer(batch_nd + res_outer_nd,
+                                       res_batch_offset, res_shape_strides);
+            using InitKernelName =
+                class gemm_batch_init_krn<lhsTy, rhsTy, resTy>;
+            cgh.parallel_for<InitKernelName>(
+                sycl::range<1>(n * m * batch_nelems), [=](sycl::id<1> id) {
+                    auto res_offset = res_indexer(id[0]);
+                    res_tp[res_offset] = resTy(0);
+                });
+        });
 
     if (k == 0) {
         return res_init_ev;
@@ -1750,10 +1757,11 @@ sycl::event gemm_batch_contig_impl(sycl::queue &exec_q,
             batch_indexer, lhs_indexer, rhs_indexer, res_indexer, depends);
     }
 
-    sycl::event res_init_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(depends);
-        cgh.fill<resTy>(res_tp, resTy(0), n * m * batch_nelems);
-    });
+    sycl::event res_init_ev =
+        sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(depends);
+            cgh.fill<resTy>(res_tp, resTy(0), n * m * batch_nelems);
+        });
 
     if (k == 0) {
         return res_init_ev;
@@ -2211,7 +2219,8 @@ sycl::event _gemm_tree_k_step(sycl::queue &exec_q,
 {
     static_assert(std::is_same_v<LhsIndexerT, RhsIndexerT>);
 
-    sycl::event gemm_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event gemm_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         const std::size_t n_blocks = (n + delta_n - 1) / delta_n;
@@ -2499,7 +2508,8 @@ sycl::event _gemm_tree_nm_step(sycl::queue &exec_q,
 {
     static_assert(std::is_same_v<LhsIndexerT, RhsIndexerT>);
 
-    sycl::event gemm_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event gemm_ev = sycl_utils::submit_kernel(exec_q, [&](sycl::handler
+                                                                    &cgh) {
         cgh.depends_on(depends);
 
         const std::size_t lws = wg_delta_n * wg_delta_m;
@@ -2854,7 +2864,7 @@ sycl::event gemm_batch_tree_impl(sycl::queue &exec_q,
 
     if (k == 0) {
         sycl::event gemm_batch_no_reduction_ev =
-            exec_q.submit([&](sycl::handler &cgh) {
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
                 cgh.depends_on(depends);
 
                 using IndexerT = dpnp::tensor::offset_utils::StridedIndexer;
@@ -3436,7 +3446,7 @@ sycl::event
 
     if (k == 0) {
         sycl::event gemm_batch_no_reduction_ev =
-            exec_q.submit([&](sycl::handler &cgh) {
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
                 cgh.depends_on(depends);
                 cgh.fill<resTy>(res_tp, resTy(0), n * m * batch_nelems);
             });
@@ -3833,7 +3843,7 @@ sycl::event gemm_tree_impl(sycl::queue &exec_q,
 
     if (k == 0) {
         sycl::event gemm_no_reduction_ev =
-            exec_q.submit([&](sycl::handler &cgh) {
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
                 cgh.depends_on(depends);
 
                 using IndexerT = dpnp::tensor::offset_utils::StridedIndexer;
@@ -4193,7 +4203,7 @@ sycl::event gemm_contig_tree_impl(sycl::queue &exec_q,
 
     if (k == 0) {
         sycl::event gemm_no_reduction_ev =
-            exec_q.submit([&](sycl::handler &cgh) {
+            sycl_utils::submit_kernel(exec_q, [&](sycl::handler &cgh) {
                 cgh.depends_on(depends);
                 cgh.fill<resTy>(res_tp, resTy(0), n * m);
             });
