@@ -34,6 +34,7 @@
 #include "ext/common.hpp"
 
 // dpnp tensor headers
+#include "utils/sycl_utils.hpp"
 #include "utils/type_utils.hpp"
 
 #include "common_helpers.hpp"
@@ -140,13 +141,14 @@ static sycl::event gesvd_impl(sycl::queue &exec_q,
         throw std::runtime_error(error_msg.str());
     }
 
-    sycl::event ht_ev = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(gesvd_event);
-        auto ctx = exec_q.get_context();
-        cgh.host_task([ctx, scratchpad]() {
-            dpnp::tensor::alloc_utils::sycl_free_noexcept(scratchpad, ctx);
+    sycl::event ht_ev = dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(gesvd_event);
+            auto ctx = exec_q.get_context();
+            cgh.host_task([ctx, scratchpad]() {
+                dpnp::tensor::alloc_utils::sycl_free_noexcept(scratchpad, ctx);
+            });
         });
-    });
 
     return ht_ev;
 }

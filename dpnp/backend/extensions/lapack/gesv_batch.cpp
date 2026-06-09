@@ -35,6 +35,7 @@
 #include "ext/common.hpp"
 
 // dpnp tensor headers
+#include "utils/sycl_utils.hpp"
 #include "utils/type_utils.hpp"
 
 #include "common_helpers.hpp"
@@ -299,20 +300,21 @@ static sycl::event gesv_batch_impl(sycl::queue &exec_q,
         throw std::runtime_error(error_msg.str());
     }
 
-    sycl::event ht_ev = exec_q.submit([&](sycl::handler &cgh) {
+    sycl::event ht_ev = dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
 #if defined(USE_ONEMATH)
-        cgh.depends_on(comp_event);
+            cgh.depends_on(comp_event);
 #else
         for (const auto &ev : comp_evs) {
             cgh.depends_on(ev);
         }
 #endif // USE_ONEMATH
-        auto ctx = exec_q.get_context();
-        cgh.host_task([ctx, scratchpad, ipiv]() {
-            sycl_free_noexcept(scratchpad, ctx);
-            sycl_free_noexcept(ipiv, ctx);
+            auto ctx = exec_q.get_context();
+            cgh.host_task([ctx, scratchpad, ipiv]() {
+                sycl_free_noexcept(scratchpad, ctx);
+                sycl_free_noexcept(ipiv, ctx);
+            });
         });
-    });
 
     return ht_ev;
 }

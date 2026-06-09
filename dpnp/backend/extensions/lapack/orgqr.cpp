@@ -36,6 +36,7 @@
 // dpnp tensor headers
 #include "utils/memory_overlap.hpp"
 #include "utils/sycl_alloc_utils.hpp"
+#include "utils/sycl_utils.hpp"
 #include "utils/type_utils.hpp"
 
 #include "orgqr.hpp"
@@ -144,13 +145,14 @@ static sycl::event orgqr_impl(sycl::queue &exec_q,
         throw std::runtime_error(error_msg.str());
     }
 
-    sycl::event clean_up_event = exec_q.submit([&](sycl::handler &cgh) {
-        cgh.depends_on(orgqr_event);
-        auto ctx = exec_q.get_context();
-        cgh.host_task([ctx, scratchpad]() {
-            dpnp::tensor::alloc_utils::sycl_free_noexcept(scratchpad, ctx);
+    sycl::event clean_up_event = dpnp::tensor::sycl_utils::submit_kernel(
+        exec_q, [&](sycl::handler &cgh) {
+            cgh.depends_on(orgqr_event);
+            auto ctx = exec_q.get_context();
+            cgh.host_task([ctx, scratchpad]() {
+                dpnp::tensor::alloc_utils::sycl_free_noexcept(scratchpad, ctx);
+            });
         });
-    });
     host_task_events.push_back(clean_up_event);
 
     return orgqr_event;
