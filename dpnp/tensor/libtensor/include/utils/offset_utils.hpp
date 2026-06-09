@@ -46,7 +46,6 @@
 #include "kernels/dpnp_tensor_types.hpp"
 #include "utils/strided_iters.hpp"
 #include "utils/sycl_alloc_utils.hpp"
-#include "utils/sycl_utils.hpp"
 
 namespace dpnp::tensor::offset_utils
 {
@@ -122,15 +121,14 @@ std::tuple<std::unique_ptr<indT, dpnp::tensor::alloc_utils::USMDeleter>,
     sycl::event copy_ev =
         q.copy<indT>(packed_shape_strides_owner->data(), shape_strides, sz);
 
-    sycl::event cleanup_host_task_ev =
-        sycl_utils::submit_kernel(q, [&](sycl::handler &cgh) {
-            cgh.depends_on(copy_ev);
-            cgh.host_task([packed_shape_strides_owner =
-                               std::move(packed_shape_strides_owner)] {
-                // increment shared pointer ref-count to keep it alive
-                // till copy operation completes;
-            });
+    sycl::event cleanup_host_task_ev = q.submit([&](sycl::handler &cgh) {
+        cgh.depends_on(copy_ev);
+        cgh.host_task([packed_shape_strides_owner =
+                           std::move(packed_shape_strides_owner)] {
+            // increment shared pointer ref-count to keep it alive
+            // till copy operation completes;
         });
+    });
     host_task_events.push_back(cleanup_host_task_ev);
 
     return std::make_tuple(std::move(shape_strides_owner), sz, copy_ev);
